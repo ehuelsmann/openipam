@@ -628,8 +628,9 @@ class MainWebService(XMLRPCController):
 			del kw['owners_list']
 		
 		# If we're editing and no owners were specified, add in [] to satisify checks below
-		if kw['editing'] and not kw.has_key('owners'):
-			kw['owners'] = []
+		# FYI: code below assumes that if kw.has_key('owners'), we are changing ownership
+		#if kw['editing'] and not kw.has_key('owners'):
+		#	kw['owners'] = []
 		
 		if (not kw.has_key('mac')
 		or not kw.has_key('hostname')
@@ -736,13 +737,15 @@ class MainWebService(XMLRPCController):
 				# Am I in a group that has owner over this host?
 				# There is surely a more elegant and pythonic way to compare all elements of lists:
 				has_owner_group = False
-				for name in users_group_names:
-					if name in kw['owners']:
-						has_owner_group = True
-						break
-					
-				if (kw.has_key('owners') and (not has_owner_group and not self.get_users( { 'uid' : cherrypy.session['user']['uid'], 'gid' : backend.db_service_group_id } ))):
-					messages.append("You are not allowed to remove yourself from ownership of this host. However, you can assign other owners and have them remove you from this host.")
+				if kw.has_key('owners'):
+					for name in users_group_names:
+						if name in kw['owners']:
+							has_owner_group = True
+							break
+				
+				# The backend doesn't enforce this, so why should the frontend?
+				#if (kw.has_key('owners') and (not has_owner_group and not self.get_users( { 'uid' : cherrypy.session['user']['uid'], 'gid' : backend.db_service_group_id } ))):
+				#	messages.append("You are not allowed to remove yourself from ownership of this host. However, you can assign other owners and have them remove you from this host (owners: %s)"%owners)
 		
 		# Verify that this host MAC and hostname don't exist already
 		if not kw['editing']:
@@ -841,6 +844,12 @@ class MainWebService(XMLRPCController):
 		# Check permissions -- do this in every exposed function
 		db = self.__check_session()
 		db.delete_hosts(**args[0])
+
+	@cherrypy.expose
+	def change_hosts(self, *args):
+		# Check permissions -- do this in every exposed function
+		db = self.__check_session()
+		db.change_hosts(**args[0])
 
 	@cherrypy.expose
 	def is_dynamic_host(self, *args):
@@ -990,6 +999,18 @@ class MainWebService(XMLRPCController):
 		addr = db.assign_static_address( **args[0] )
 		return addr
 
+	@cherrypy.expose
+	def release_static_address(self, *args):
+		"""
+		Release a static address from a host
+		"""
+		
+		# Check permissions -- do this in every exposed function
+		db = self.__check_session()
+
+		addr = db.release_static_address( **args[0] )
+		return None
+
 	#----------------------	   NETWORKS	   ---------------------------
 	
 	@cherrypy.expose
@@ -1061,8 +1082,7 @@ class MainWebService(XMLRPCController):
 		
 		# Check permissions -- do this in every exposed function
 		db = self.__check_session()
-		
-		pass
+		db.del_network(**args[0])
 	
 	@cherrypy.expose
 	def get_networks(self, *args):
@@ -1809,7 +1829,7 @@ class MainWebService(XMLRPCController):
 		
 		@return: a ticket string name
 		"""
-	
+		
 		vowels = ("a", "e", "i", "o", "u")
 		consonants = [a for a in string.ascii_lowercase if a not in vowels]
 		groups = ("th", "ch", "sh", "kl", "gr", "br")
@@ -1873,9 +1893,15 @@ class MainWebService(XMLRPCController):
 		if not args:
 			raise error.RequiredArgument("nothing passed to add_guest_ticket")
 		
-		ticket = self.__generate_ticket_name()
+		# FIXME: much of this wouldn't be an issue if we deleted (or lazily-deleted) expired guest tickets
+		for i in range(3):
+			# Try a few times to generate a unique ticket name that doesn't exist
+			ticket = self.__generate_ticket_name()
+			if not db.get_guest_tickets(ticket=ticket):
+				break
 		
-		query = db.add_guest_ticket(ticket=ticket, **args[0])
+		# Add the new ticket
+		db.add_guest_ticket(ticket=ticket, **args[0])
 		
 		return { 'ticket' : ticket, 'starts' : args[0]['starts'], 'ends' : args[0]['ends'], 'description' : args[0]['description'] }
 		
@@ -2000,6 +2026,11 @@ class MainWebService(XMLRPCController):
 				raise error.NotFound("The MAC address for this guest's host could not be found. Ticket: %s IP:%s" % (args[0]['ticket'], args[0]['ip']))
 			
 			macaddr = macaddr[0]['mac']
+			
+			# Raise AlreadyExists exception if the host already exists and is not expired
+			hosts = __guest_db.get_hosts(mac=macaddr, show_expired=False)
+			if hosts:
+				raise error.AlreadyExists(mac=macaddr)
 			
 			# Get the last guest hosts
 			hosts = __guest_db.get_hosts( hostname=hostname_fmt % '%%', limit=1, funky_ordering=True)

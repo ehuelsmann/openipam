@@ -45,7 +45,7 @@ class Hosts(BasePage):
 	def get_leftnav(self, action="", show_options=True):
 		return '%s%s' % (self.leftnav_actions(action), (self.leftnav_options() if show_options else ''))
 	
-	def get_hosts(self, page=0, ip=None, mac=None, hostname=None, namesearch=None, network=None, username=None, expiring=False, count=False, order_by='hostname'):
+	def get_hosts(self, page=0, ip=None, mac=None, hostname=None, namesearch=None, network=None, uid=None, username=None, gid=None, groupname=None, expiring=False, count=False, order_by='hostname'):
 		"""
 		@param page: the current page the user is viewing
 		@param show_all_hosts: default false, will only show hosts that the current user has OWNER over
@@ -59,10 +59,10 @@ class Hosts(BasePage):
 			additional_perms = '00000000'
 
 		if hostname:
-			hostname = hostname.replace('*','%')
+			hostname = hostname.replace('*','%').lower()
 		
 		if namesearch:
-			namesearch = namesearch.replace('*','%')
+			namesearch = namesearch.replace('*','%').lower()
 		
 		values = {
 			'additional_perms' : str(additional_perms),
@@ -72,7 +72,10 @@ class Hosts(BasePage):
 			'ip' : ip,
 			'mac' : mac,
 			'count' : count,
+			'uid' : uid,
 			'username' : username,
+			'gid' : gid,
+			'groupname' : groupname,
 			'hostname' : hostname,
 			'namesearch' : namesearch,
 			'order_by' : order_by,
@@ -126,6 +129,7 @@ class Hosts(BasePage):
 		values['domains'] = self.webservice.get_domains( { 'additional_perms' : str(frontend.perms.ADD), 'show_reverse' : False, 'order_by' : 'name' } )
 		values['expirations'] = self.webservice.get_expiration_types()
  		values['groups'] = self.webservice.get_groups( { 'ignore_usergroups' : True, 'order_by' : 'name' } )
+ 		values['dhcp_groups'] = self.webservice.get_dhcp_groups( {'order_by' : 'name' } )
 		
 		return values
 
@@ -148,7 +152,8 @@ class Hosts(BasePage):
 			'owners_list' : kw['owners_list'], 
 			'network' : (kw['network'] if kw.has_key('network') and kw['network'] else None),
 			'add_host_to_my_group' : False,
-			'address' : (kw['ip'] if kw.has_key('ip') else None)
+			'address' : (kw['ip'] if kw.has_key('ip') else None),
+			'dhcp_group': (kw['dhcp_group'] if kw.has_key('dhcp_group') and kw['dhcp_group'] else None),
 			})
 		
 		raise cherrypy.HTTPRedirect('/hosts/search/?q=%s' % misc.fix_mac(mac))
@@ -172,7 +177,8 @@ class Hosts(BasePage):
 			'is_dynamic' : kw.has_key('dynamicIP'),
 			'owners_list' : kw['owners_list'], 
 			'network' : (kw['network'] if kw.has_key('did_change_ip') or (kw.has_key('was_dynamic') and not kw.has_key('dynamicIP')) else None),
-			'address' : (kw['ip'] if kw.has_key('did_change_ip') and kw.has_key('ip') else None)
+			'address' : (kw['ip'] if kw.has_key('did_change_ip') and kw.has_key('ip') else None),
+			'dhcp_group': (kw['dhcp_group'] if kw.has_key('dhcp_group') and kw['dhcp_group'] else None),
 			})
 		
 		raise cherrypy.HTTPRedirect('/hosts/search/?q=%s' % misc.fix_mac(kw['mac'] if kw['mac'] else kw['old_mac']))
@@ -272,7 +278,7 @@ class Hosts(BasePage):
 		owners = self.webservice.find_owners_of_host( { 'mac' : macaddr } )
 		is_dynamic = self.webservice.is_dynamic_host( { 'mac' : macaddr } )
 		domain = self.webservice.get_domains( { 'contains' : str(host['hostname']), 'additional_perms' : str(frontend.perms.ADD) } )
-		ips = self.webservice.get_dns_records( { 'mac' : macaddr, 'tid': 1 } )
+		ips = self.webservice.get_addresses( { 'mac' : macaddr } )
 
 		values['has_domain_access'] = bool(domain)
 		if domain:
@@ -320,7 +326,7 @@ class Hosts(BasePage):
 				'ip':'ip', 'mac':'mac', 'user':'username',
 				'username':'username', 'net':'network',
 				'network':'network', 'hostname':'namesearch',
-				'name':'namesearch',
+				'name':'namesearch', 'group':'groupname',
 				}
 
 		for element in q.split( ):
@@ -385,6 +391,12 @@ class Hosts(BasePage):
 		
 		values['url'] = cherrypy.url()
 
+ 		values['groups'] = self.webservice.get_groups( { 'ignore_usergroups' : True, 'order_by' : 'name' } )
+ 		values['dhcp_group_dict'] = {}
+		dhcp_groups = self.webservice.get_dhcp_groups( {'order_by' : 'name' } )
+		for g in dhcp_groups:
+			values['dhcp_group_dict'][g['id']] = dict(g)
+
 		return self.__template.wrap(leftcontent=self.get_leftnav(), filename='%s/templates/hosts.tmpl'%frontend.static_dir, values=values)
 	
 	
@@ -410,10 +422,14 @@ class Hosts(BasePage):
 		elif multiaction == 'renew':
 			self.webservice.renew_hosts( {'hosts':multihosts} );
 		# need to get the owners...
-		#elif multiaction == 'owners':
-		#	self.webservice._hosts( hosts=multihosts )
+		elif multiaction == 'owners':
+			if kw.has_key('owners_list'):
+				owners = kw['owners_list'].split(',')
+				self.webservice.change_hosts( {'hosts':multihosts, 'owners':owners,} )
+			else:
+				raise error.InvalidArgument("owners_list not defined!")
 		else:
-			raise cherrypy.HTTPRedirect(ref)
+			raise error.InvalidArgument("Invalid action: '%s'" % multiaction)
 
 		# FIXME: We should have the calling page include its URL in the form
 		# Gahh....evill....re-write me....

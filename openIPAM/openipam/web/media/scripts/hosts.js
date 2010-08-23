@@ -253,18 +253,6 @@ $(function() {
 		$('#loaderIcon').show();
 	});
 
-	$("#submitMultiAction").click(function () {
-		var actionDropdown = document.getElementsByName("multiaction");
-		var actionName = actionDropdown[0].value;
-		if (actionName == "delete") {
-			if (confirm("Are you sure you want to DELETE ALL of the selected hosts?") && confirm("This will also delete all associated DNS records, and possibly eat your homework.  Also, if you have selected a lot of hosts, it could take a minute.  Are you SURE you're sure?")) {
-				return true;
-			}
-			return false;
-		}
-		return true;
-	});
-	
 	$('.toggleHostFlyout').click(function () {
 		toggleHostFlyout($(this).attr('name'));
 		$(this).blur()
@@ -372,6 +360,26 @@ $(function() {
 		});
 	}
 	
+	$("#submitMultiAction").click(function () {
+		var actionDropdown = document.getElementsByName("multiaction");
+		var actionName = actionDropdown[0].value;
+		if (actionName == "delete") {
+			if (confirm("Are you sure you want to DELETE ALL of the selected hosts?") && confirm("This will also delete all associated DNS records, and possibly eat your homework.  Also, if you have selected a lot of hosts, it could take a minute.  Are you SURE you're sure?")) {
+				return true;
+			}
+			return false;
+		}
+		return true;
+	});
+
+	$("#multiaction").change(function () {
+		var actionDropdown = document.getElementsByName("multiaction");
+		var actionName = actionDropdown[0].value;
+		if (actionName == "owners") {
+			$("#group_dialog").dialog("open");	
+		}
+	});
+	
 	
 	$('.delHost').click(function () {
 		if (confirm("All of this host's DNS resource records will be irreversibly lost (including any A records, CNAMEs, MX records, etc.)\n\nAre you sure want to permanently delete this host?\n"+$('a[name="'+$(this).attr('name')+'"][id="hostLink"]').text()) && confirm("Are you SURE you are sure?")) {
@@ -424,6 +432,7 @@ $(function() {
 	}
 	
 	$('#searchBox').focus();
+	$('#mac').focus();
 
 	$("#selectAll").click(function() {
 		if ($(this).attr("checked")) {

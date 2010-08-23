@@ -13,6 +13,7 @@ COPY permissions ( id, name, description ) FROM stdin;
 00000110	READ_ADD	Read and add (but not modify) records
 00001110	MODIFY	Read and modify (and add and delete) records
 00001111	OWNER	The owner gets to do a lot of things...
+00010000	SECURITY	Special permission for disabling hosts
 11111111	DEITY	All permissions
 \.
 
@@ -617,4 +618,19 @@ CREATE TABLE disabled (
 	disabled_by integer REFERENCES users(id) NOT NULL
 );
 
+CREATE TABLE vlans (
+	id smallint PRIMARY KEY,
+	name varchar(12) NOT NULL, -- our HP switches
+	description text,
+	changed timestamp default NOW(),
+	changed_by integer REFERENCES users(id) NOT NULL,
+	CHECK (id > 0 AND id < 4096)
+);
+
+CREATE TABLE networks_to_vlans (
+	network cidr references networks(network) PRIMARY KEY,
+	vlan smallint REFERENCES vlans(id) NOT NULL,
+	changed timestamp default NOW(),
+	changed_by integer REFERENCES users(id) NOT NULL
+);
 

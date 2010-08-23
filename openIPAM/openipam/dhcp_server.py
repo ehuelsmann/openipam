@@ -26,6 +26,8 @@ from pydhcplib.dhcp_constants import DhcpOptions
 from pydhcplib.dhcp_packet import *
 from pydhcplib.dhcp_network import *
 
+import IN
+
 #from pydhcplib.dhcp_packet import DhcpPacket
 #import dhcp_packet
 #import dhcp_network
@@ -79,144 +81,209 @@ def bytes_to_int( bytes ):
 		x = (x << 8) | i
 	return x
 
-class Server(DhcpServer):
-	def __init__(self, dbq):
-		DhcpServer.__init__(self,dhcp.listen_address,
-					dhcp.client_port,
-					dhcp.server_port)
-		self.__dbq = dbq
-		self.last_seen = {}
+def get_packet_type( packet ):
+	_type = None
+	if packet.IsOption("dhcp_message_type"):
+		_type = bytes_to_int( packet.GetOption("dhcp_message_type") )
+	return _type
 	
-	def SendPacket(self, packet, dest = None, bootp = False):
+class Server():
+	BUFLEN=8192
+	listen_address = '0.0.0.0'
+	listen_port = 67
+	bootpc_port = 68
+	bootps_port = 67
+	def __init__(self, dbq):
+		self.__dbq = dbq
+		#self.last_seen = {}
+		self.seen = {}
+		self.seen_cleanup = []
+		self.dhcp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		self.dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
+		if dhcp.server_interface:
+			self.interface = dhcp.server_interface
+			if self.interface[-1] != '\0':
+				iface=self.interface+'\0'
+			else:
+				iface=self.interface
+			self.dhcp_socket.setsockopt(socket.SOL_SOCKET,IN.SO_BINDTODEVICE,iface)
+		self.dhcp_socket.bind((self.listen_address, self.listen_port))
+		self.dhcp_socket_addr = dhcp.server_ip
+
+	def HandlePacket( self ):
+		data,sender = self.dhcp_socket.recvfrom(self.BUFLEN)
+
+		packet = dhcp_packet.DhcpPacket()
+		packet.DecodePacket(data)
+		packet.set_sender( sender )
+		packet.set_recv_interface( self.dhcp_socket_addr )
+
+		packet_type = get_packet_type( packet )
+		self.QueuePacket( packet, packet_type )
+
+	def SendPacket(self, packet, bootp = False):
 		"""Encode and send the packet."""
 
+		#sender = packet.get_sender()
 		giaddr = '.'.join(map(str,packet.GetOption('giaddr')))
 		ciaddr = '.'.join(map(str,packet.GetOption('ciaddr')))
+		yiaddr = '.'.join(map(str,packet.GetOption('yiaddr')))
+		chaddr = decode_mac( packet.GetOption('chaddr') )
 
-		# ALWAYS set these
-		# Server-related options:
-		packet.SetOption("siaddr",dhcp.server_ip_lst)
 		if not bootp:
 			packet.SetOption("server_identifier",dhcp.server_ip_lst) # DHCP server IP
 
-		broadcast = packet.GetOption('flags')[0] >> 7
+		# See rfc1532 page 21
+		if ciaddr != '0.0.0.0':
+			log_packet(packet, prefix='SND/CIADDR:')
+			dest = ( ciaddr, self.bootpc_port )
+		elif giaddr != '0.0.0.0':
+			log_packet(packet, prefix='SND/GIADDR:')
+			dest = ( giaddr, self.bootps_port )
+		elif yiaddr != '0.0.0.0':
+			broadcast = packet.GetOption('flags')[0] >> 7
 
-		# FIXME: If !ciaddr and first bit of flags (broadcast bit) is set, broadcast/send to giaddr, otherwise unicast to yiaddr ???
-
-		if not dest:
-			dest = ciaddr
-		
-		if dest != '0.0.0.0':
-			#print 'Sending packet directly to %s' % dest
-			log_packet(packet, prefix='SND/DIR:')
-			self.SendDhcpPacketTo(dest, packet, port=dhcp.client_port)
-		elif giaddr!='0.0.0.0':
-			#print " - in SendPacket, giaddr != 0.0.0.0, sending to giaddr=%s" % giaddr
-			log_packet(packet, prefix='SND/GW:')
-			self.SendDhcpPacketTo(giaddr, packet, port=dhcp.server_port)
-
-		# FIXME: This shouldn't broadcast if it has an IP address to send
-		# it to instead. See RFC2131 part 4.1 for full details
+			if broadcast:
+				log_packet(packet, prefix='SND/BCAST:')
+				dest = ( '255.255.255.255', self.bootpc_port )
+			else:
+				# FIXME: need to send this directly to chaddr :/
+				#log_packet(packet, prefix='SND/CHADDR:')
+				#dest = ( yiaddr, self.bootpc_port ) 
+				try:
+					os.system("arp -H ether -i %s -s %s %s temp" % (self.dhcp_iface, yiaddr, chaddr))
+					log_packet(packet, prefix='SND/ARPHACK:')
+					dest = ( yiaddr, self.bootpc_port )
+				except:
+					log_packet(packet, prefix='SND/HACK:')
+					dest = ( '255.255.255.255', self.bootpc_port )
 		else:
-			# actually, let's just not do this for now
-			#self.SendDhcpPacketTo("255.255.255.255",packet)
-			#self.SendDhcpPacketTo(offered_addr,packet, port=68)
-			raise Exception("Got a packet without gateway or client address.  Probably local traffic.")
+			log_packet(packet, prefix='IGN/SNDFAIL:')
+			raise Exception('Cannot send packet without one of ciaddr, giaddr, or yiaddr.')
+
+		self.dhcp_socket.sendto( packet.EncodePacket(), dest )
 
 		if show_packets:
 			print "------- Sending Packet ----------"
+			print sender
 			packet.PrintHeaders()
 			packet.PrintOptions()
 			print "---------------------------------"
 	
-	def QueuePacket( self, packet, type ):
+	def do_seen_cleanup( self, mac, min_timestamp ):
+		if not self.seen.has_key( mac ):
+			self.seen[mac] = []
+		seen = self.seen[ mac ]
+
+		# do some cleanup on our mac
+		while seen and seen[0][0] < min_timestamp:
+			del seen[0]
+
+		# do a little bit of housekeeping while we're at it
+		if self.seen_cleanup:
+			cleanup_mac = self.seen_cleanup.pop()
+			while self.seen[ cleanup_mac ] and self.seen[ cleanup_mac ][0][0] < min_timestamp:
+				del self.seen[ cleanup_mac ][0]
+			if not self.seen[ cleanup_mac ]:
+				del self.seen[ cleanup_mac ]
+		else:
+			self.seen_cleanup = self.seen.keys()
+
+		return seen
+
+	def QueuePacket( self, packet, pkttype ):
 		mac = decode_mac( packet.GetOption('chaddr') )
 		c_time=datetime.datetime.now()
 
 		# Minimum time between allowing a user to make the same kind of request
 		#BETWEEN_REQUESTS = datetime.timedelta(days=0,minutes=0,seconds=10)
+		TIME_PERIOD = datetime.timedelta(days=0,minutes=1,seconds=0)
 
-		our_key = (mac, type,)
+		#types = { None:'bootp', 1:'discover', 2:'offer', 3:'request', 4:'decline', 5:'ack', 6:'nak', 7:'release', 8:'inform', }
+		MESSAGE_TYPE_LIMIT = { None:2, 1:6, 3:10, 4:12, 7:20, 8:16  } # we are only counting serviced packets, regardless of type
+		
+		if MESSAGE_TYPE_LIMIT.has_key(pkttype):
+			MAX_REQUESTS = MESSAGE_TYPE_LIMIT[pkttype]
+		else:
+			MAX_REQUESTS = 0
 
-		if self.last_seen.has_key( our_key ):
-			time = self.last_seen[ our_key ]
-			if ( ( c_time - time ) < dhcp.between_requests ):
-				print "ignoring request type %s from mac %s because we saw a request at %s (current: %s)" % (type, mac, str(time), str(c_time))
-				log_packet( packet, prefix='IGN/TIME:' )
+		#our_key = (mac, pkttype,)
+
+		# Thanks to the morons at MS, we can't do this.
+		# see http://support.microsoft.com/kb/835304 for more info
+		# FIXME: find another way to prevent DoS.
+		#if self.last_seen.has_key( our_key ):
+		#	time = self.last_seen[ our_key ]
+		#	if ( ( c_time - time ) < dhcp.between_requests ):
+		#		print "ignoring request type %s from mac %s because we saw a request at %s (current: %s)" % (pkttype, mac, str(time), str(c_time))
+		#		log_packet( packet, prefix='IGN/TIME:' )
+		#		return
+		#	else:
+		#		del self.last_seen[ our_key ]
+
+		min_timestamp = c_time - TIME_PERIOD
+
+		seen = self.do_seen_cleanup( mac, min_timestamp )
+
+		if len(seen) > MAX_REQUESTS:
+				log_packet( packet, prefix='IGN/LIMIT:' )
+				print "ignoring request type %s from mac %s because we have seen %s requests in %s" % (pkttype, mac, len(seen), str(TIME_PERIOD))
 				return
-			else:
-				del self.last_seen[ our_key ]
 		
 		try:
 			log_packet( packet, prefix='QUEUED:' )
-			self.__dbq.put_nowait( (type, packet) )
+			self.__dbq.put_nowait( (pkttype, packet) )
 		except Full, e:
 			# The queue is full, try again later.
 			log_packet( packet, prefix='IGN/FULL:' )
-			print "ignoring request type %s from mac %s because the queue is full ... be afraid" % (type,mac)
+			print "ignoring request type %s from mac %s because the queue is full ... be afraid" % (pkttype,mac)
 			return
 		
 		# If we get here, the packet should be in the queue, so we can
 		# guarantee it will be seen by one of the workers.  Let's add
 		# this to our list of things we don't want to respond to right
 		# now.
-		self.last_seen[ our_key ] = ( c_time )
+		#self.last_seen[ our_key ] = ( c_time )
+		seen.append( (c_time, pkttype,) )
 
-
-	def HandleDhcpDiscover(self, packet):
-		self.QueuePacket( packet, 1 )
-
-	def HandleDhcpRequest(self, packet):
-		self.QueuePacket( packet, 3 )
-
-	def HandleDhcpDecline(self, packet):
-		self.QueuePacket( packet, 4 )
-	
-	def HandleDhcpRelease(self, packet):
-		# update leases set expires = now() where mac=%(mac)s
-		self.QueuePacket( packet, 7 )
-	
-	def HandleDhcpInform(self, packet):
-		# see request
-		self.QueuePacket( packet, 8 )
-	
-	def HandleDhcpUnknown(self, packet):
-		'''They should have called this 'HandleBootpRequest'''
-		# Due to the nature of BOOTP, this should only allow
-		# static assignments.
-		self.QueuePacket( packet, None )
 
 def parse_packet( packet ):
-	type = packet.GetOption('dhcp_message_type')
+	pkttype = get_packet_type(packet)
 	mac = decode_mac( packet.GetOption('chaddr') )
 	xid = bytes_to_int( packet.GetOption('xid') )
 	requested_options = packet.GetOption('parameter_request_list')
 
-	if type in [1,3,4,7,8,]:
+	recvd_from = packet.get_sender()
+	giaddr = '.'.join(map(str,packet.GetOption('giaddr')))
+
+	client_ip = '.'.join(map(str,packet.GetOption('yiaddr')))
+	if client_ip == '0.0.0.0':
 		client_ip = '.'.join(map(str,packet.GetOption('ciaddr')))
 		if client_ip == '0.0.0.0':
 			x = packet.GetOption('request_ip_address')
 			if x:
 				client_ip = '.'.join(map(str,x))
-	else:
-		client_ip = '.'.join(map(str,packet.GetOption('yiaddr')))
+			else:
+				client_ip = packet.get_sender()[0]
 	
-	return (type, mac, xid, client_ip, requested_options)
+	return (pkttype, mac, xid, client_ip, giaddr, recvd_from, requested_options)
 
 types = { None:'bootp', 1:'discover', 2:'offer', 3:'request', 4:'decline', 5:'ack', 6:'nak', 7:'release', 8:'inform', }
 
 def log_packet( packet, prefix=''):
 	# This should be called for every incoming or outgoing packet.
-	type,mac,xid,client,req_opts = parse_packet(packet)
-	type = bytes_to_int(type)
-	if not type:
-		t_name='bootp'
+	pkttype,mac,xid,client,giaddr,recvd_from,req_opts = parse_packet(packet)
+
+	t_name = types[pkttype]
+
+	if giaddr != '0.0.0.0':
+		client_foo = '%s via %s' % (client, giaddr)
 	else:
-		t_name = types[type]
-	dhcp.get_logger().info("%-10s %-8s %s 0x%08x (%s)", prefix, t_name, mac, xid, client)
+		client_foo = str(client)
+
+	dhcp.get_logger().info("%-12s %-8s %s 0x%08x (%s)", prefix, t_name, mac, xid, client_foo )
 
 def db_consumer( dbq, send_packet ):
-	logger = dhcp.get_logger()
 	class dhcp_packet_handler:
 		# Order matters here.  We want type_map[1] == discover, etc
 		def __init__( self, send_packet ):
@@ -288,6 +355,49 @@ def db_consumer( dbq, send_packet ):
 			mac = decode_mac( packet.GetOption('chaddr') )
 			log_packet( packet, prefix='IGN/REL:' )
 
+		def assign_dhcp_options(self, options, requested, packet):
+			opt_vals = {}
+			for o in options:
+				opt_vals[ int(o['oid']) ] = o['value']
+
+			preferred = []
+			for oid in requested:
+				if DhcpRevOptions.has_key(oid):
+					preferred.append( DhcpRevOptions[oid] )
+
+			packet.options_data.set_preferred_order( preferred )
+
+			for i in opt_vals.keys():
+				packet.SetOption( DhcpRevOptions[i], bytes_to_ints( opt_vals[i] ) )
+				print "Setting %s to '%s'" % ( DhcpRevOptions[i], bytes_to_ints( opt_vals[i] ) )
+				# Use  for next-server == siaddr
+				if i == 11:
+					packet.SetOption("siaddr", bytes_to_ints( opt_vals[i] ) )
+					print "Setting next-server (siaddr) to '%s'" % ( bytes_to_ints( opt_vals[i] ) )
+				# Use tftp-server for next-server == sname
+				if i == 66:
+					v = str(opt_vals[i])
+
+					v_padded = v + '\0'*(64-len(v)) # pydhcplib is too lame to do this for us
+					packet.SetOption("sname", bytes_to_ints(v_padded) )
+					print "Setting sname to '%s'" % ( bytes_to_ints( v ) )
+					try:
+						host = self.__db.get_dns_records(tid=1,name=v)[0]
+						addr = map(int,host['ip_content'].split('.'))
+						packet.SetOption("siaddr", addr )
+						print "Setting next-server (siaddr) to '%s'" % ( addr )
+					except:
+						pass
+				# Use tftp file name for bootfile
+				if i == 67:
+					v = opt_vals[i]
+					v = v + '\0'*(128-len(v)) # pydhcplib is too lame to do this for us
+					packet.SetOption("file", bytes_to_ints(v) )
+					print "Setting next-server to '%s'" % ( bytes_to_ints( v ) )
+					#print "Adding padding for lame fujitsu PXE foo"
+					# This doesn't work because pydhcplib sucks
+					#packet.SetOption("pad",'')
+
 		def dhcp_inform(self, packet):
 			mac = decode_mac( packet.GetOption('chaddr') )
 			client_ip = '.'.join(map(str,packet.GetOption('ciaddr')))
@@ -302,10 +412,8 @@ def db_consumer( dbq, send_packet ):
 			hops = packet.GetOption('hops')
 			if hops:
 				ack.SetOption('hops',hops)
-
-			for opt in opt_vals:
-				ack.SetOption( DhcpRevOptions[opt['oid']], bytes_to_ints( opt['value'] ) )
-				#print "Setting %s to '%s'" % ( DhcpRevOptions[opt['oid']], bytes_to_ints( opt['value'] ) )
+			
+			self.assign_dhcp_options( options=opt_vals, requested=requested_options, packet=ack )
 
 			# send an ack
 			self.SendPacket( ack )
@@ -316,8 +424,8 @@ def db_consumer( dbq, send_packet ):
 			requested_ip = '.'.join(map(str,packet.GetOption('request_ip_address')))
 			
 			if router == '0.0.0.0':
-				logger.log( "Ignoring local DHCP traffic from %s (xid:0x%x)", mac, xid )
-				return
+				# hey, local DHCP traffic!
+				router = packet.get_recv_interface()
 
 			if not requested_ip:
 				requested_ip = '.'.join(map(str,packet.GetOption('ciaddr')))
@@ -374,9 +482,7 @@ def db_consumer( dbq, send_packet ):
 				opt_vals = self.__db.retrieve_dhcp_options( mac=mac, address=requested_ip, option_ids = requested_options )
 				print "opt_vals: %s" % str(opt_vals)
 
-				for opt in opt_vals:
-					offer.SetOption( DhcpRevOptions[opt['oid']], bytes_to_ints( opt['value'] ) )
-					print "Setting %s to '%s'" % ( DhcpRevOptions[opt['oid']], bytes_to_ints( opt['value'] ) )
+				self.assign_dhcp_options( options=opt_vals, requested=requested_options, packet=offer )
 
 			# send an offer
 			print "  > sending offer"
@@ -419,15 +525,7 @@ def db_consumer( dbq, send_packet ):
 				hops = packet.GetOption('hops')
 				if hops:
 					nak.SetOption('hops',hops)
-				if giaddr != '0.0.0.0':
-					self.SendPacket( nak )
-				elif ciaddr != '0.0.0.0':
-					self.SendPacket( nak, dest=ciaddr )
-				elif requested_ip != '0.0.0.0':
-					self.SendPacket( nak, dest=requested_ip )
-				else:
-					self.SendPacket( nak )
-				# FIXME: We aren't handling this right... or somethink...
+				self.SendPacket( nak )
 				return
 
 			ack = DhcpPacket()
@@ -456,9 +554,7 @@ def db_consumer( dbq, send_packet ):
 			ack.SetOption("broadcast_address",ip_to_list(lease['broadcast'])) # TEST
 			ack.SetOption("router",ip_to_list(lease['router']))
 
-			for opt in opt_vals:
-				ack.SetOption( DhcpRevOptions[opt['oid']], bytes_to_ints( opt['value'] ) )
-				print "Setting %s to '%s'" % ( DhcpRevOptions[opt['oid']], bytes_to_ints( opt['value'] ) )
+			self.assign_dhcp_options( options=opt_vals, requested=requested_options, packet=ack )
 
 			# send an ack
 			print "  > sending ack"
@@ -481,7 +577,8 @@ def db_consumer( dbq, send_packet ):
 			dhcp_handler.handle_packet( pkt, type=pkttype )	
 		except error.NotFound, e:
 			#print_exception( e, traceback=False )
-			print 'sorry'
+			print 'sorry, no lease found'
+			log_packet( pkt, prefix='IGN/UNAVAIL:' )
 			print str(e)
 		except Exception,e:
 			print_exception( e )

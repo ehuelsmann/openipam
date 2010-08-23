@@ -281,6 +281,7 @@ class DBBaseInterface(object):
 		if not self.has_min_perms(permission):
 			host_perms = obj.perm_query( self._uid, self._min_perms, hosts = True, required_perms = permission )
 			net_perms = obj.perm_query( self._uid, self._min_perms, networks = True, required_perms = permission )
+			dom_perms = obj.perm_query( self._uid, self._min_perms, domains = True, required_perms = permission )
 			
 			# Find all hosts where the user has access via networks_to_groups
 			net_perms = net_perms.join(obj.addresses, and_(net_perms.c.nid == obj.addresses.c.network, obj.addresses.c.mac==mac))
@@ -288,17 +289,22 @@ class DBBaseInterface(object):
 			# Find all hosts where the user has access via hosts_to_groups
 			host_perms = host_perms.join(obj.hosts, and_(host_perms.c.mac==obj.hosts.c.mac, obj.hosts.c.mac==mac))
 			
+			# Find all hosts where the user has access via networks_to_groups
+			dom_perms = dom_perms.join(obj.domains, dom_perms.c.did == obj.domains.c.id).join(obj.hosts, and_( obj.hosts.c.hostname.like('%.' + obj.domains.c.name), obj.hosts.c.mac==mac))
+			
 			net_hosts = select([obj.addresses.c.mac], from_obj=net_perms)
 			group_hosts = select([obj.hosts.c.mac], from_obj=host_perms)
+			dom_hosts = select([obj.hosts.c.mac], from_obj=dom_perms)
 			
-			# Execute the queries
+			# Execute the queries -- FIXME - do a union
 			net_hosts = self._execute(net_hosts)
 			group_hosts = self._execute(group_hosts)
+			dom_hosts = self._execute(dom_hosts)
 			
 			# If anything exists, we allow this to continue because the user has permissions
 			# over that host either via a host group or a network
 			# If empty, raise exception
-			if not group_hosts and not net_hosts:
+			if not group_hosts and not net_hosts and not dom_hosts:
 				raise error.InsufficientPermissions(error_msg)
 
 	def _require_perms_on_address(self, permission, address, error_msg=None):
@@ -367,14 +373,14 @@ class DBBaseInterface(object):
 		
 		# Make sure to OR users_to_groups.host_permissions after finding the user's group permissions
 		# Hosts to Groups --> Users to Groups
-		fromobject = fromobject.join(obj.users_to_groups, obj.users_to_groups.c.gid == obj.hosts_to_groups.c.gid )
+		fromobject = fromobject.outerjoin(obj.users_to_groups, obj.users_to_groups.c.gid == obj.hosts_to_groups.c.gid )
 		whereobject = obj.users_to_groups.c.permissions.op('|')(obj.users_to_groups.c.host_permissions).op('&')(str(perms.OWNER)) == str(perms.OWNER)
+		# Handle groups with no owners :/
+		whereobject = or_(whereobject, obj.users_to_groups.c.id == None)
 		
 		if get_users:
 			# Users to Groups --> Users
 			fromobject = fromobject.join(obj.users, obj.users.c.id == obj.users_to_groups.c.uid)
-		
-		if get_users:
 			query = select([obj.users], whereobject, from_obj=fromobject, distinct=True)
 		else:
 			query = select([obj.groups], whereobject, from_obj=fromobject, distinct=True)
@@ -478,7 +484,7 @@ class DBBaseInterface(object):
 		
 		self.require_perms(perms.READ)
 		
-		if not address and not mac and not pool:
+		if not address and not mac and not pool and not network:
 			self.require_perms(perms.OWNER)
 		
 		query = select( [obj.addresses] )
@@ -642,15 +648,18 @@ class DBBaseInterface(object):
 
 			if addresses:
 				a_records = self._get_dns_records( address = addresses ).distinct()
-				union_foo.append(a_records.where(whereclause))
+				if a_records:
+					union_foo.append(a_records.where(whereclause))
 
 				ptr_names = [ openipam.iptypes.IP(i).reverseName()[:-1] for i in addresses ]
-				ptrs = self._get_dns_records( name=ptr_names ).distinct()
-				union_foo.append(ptrs.where(whereclause))
+				if ptr_names:
+					ptrs = self._get_dns_records( name=ptr_names ).distinct()
+					union_foo.append(ptrs.where(whereclause))
 
 				a_record_names = [ i['name'] for i in self._execute(self._get_dns_records(address=addresses).with_only_columns([obj.dns_records.c.name,]) ) ]
-				other_records = self._get_dns_records( content = a_record_names ).distinct()
-				union_foo.append(other_records.where(whereclause))
+				if a_record_names:
+					other_records = self._get_dns_records( content = a_record_names ).distinct()
+					union_foo.append(other_records.where(whereclause))
 
 			if len(union_foo) > 2:
 				query = union( *union_foo )
@@ -795,13 +804,25 @@ class DBBaseInterface(object):
 			query = query.where(obj.guest_tickets.c.uid == uid) 
 			
 		return query
+
+	def _get_users_to_groups(self, uid=None, gid=None):
+		# require read permissions over associated groups
+		self.require_perms(perms.READ)
+
+		query = select([obj.users_to_groups], from_obj=obj.users_to_groups)
+		if uid:
+			query = query.where(obj.users_to_groups.c.uid==int(uid))
+		if gid:
+			query = query.where(obj.users_to_groups.c.gid==int(gid))
 			
+		return query
+
 	def _get_groups( self, gid=None, name=None, ignore_usergroups=False, uid=None, additional_perms=None):
 		"""
 		Return groups
 		
 		@param gid: return a single group of this database ID
-		@param name: return a single group of this name
+		@param name: return groups matching this name
 		@param ignore_usergroups: a boolean, if true no groups prepended with 'user_' will be returned
 		@param uid: a user's database ID, returns a user's groups, optionally filtered by permissions in that group
 		@param additional_perms: return groups where the users_to_groups.permissions meet these additional permission requirements
@@ -829,13 +850,16 @@ class DBBaseInterface(object):
 		if gid:
 			query = query.where(obj.groups.c.id == gid)
 		if name:
-			query = query.where(sqlalchemy.sql.func.lower(obj.groups.c.name) == name.lower())
+			if '%' in name:
+				query = query.where( sqlalchemy.sql.func.lower(obj.groups.c.name).like(name.lower()) )
+			else:
+				query = query.where(sqlalchemy.sql.func.lower(obj.groups.c.name) == name.lower())
 		if ignore_usergroups:
 			query = query.where(not_(sqlalchemy.sql.func.lower(obj.groups.c.name).like('user_%')))
 			
 		return query
 	
-	def _get_hosts( self, mac=None, hostname=None, ip=None, network=None, uid=None, username=None, gid=None, columns=None, additional_perms=None, expiring=False, namesearch=None, show_expired=True, show_active=True, only_dynamics=False, only_statics=False, funky_ordering=False ):
+	def _get_hosts( self, mac=None, hostname=None, ip=None, network=None, uid=None, username=None, gid=None, groupname=None, columns=None, additional_perms=None, expiring=False, namesearch=None, show_expired=True, show_active=True, only_dynamics=False, only_statics=False, funky_ordering=False ):
 		"""
 		Get hosts and DNS records from the DB
 		@param mac: return a list containing the host with this mac
@@ -879,10 +903,21 @@ class DBBaseInterface(object):
 			
 		# If username was passed in, get the uid
 		if username:
+			if uid:
+				raise Exception("You cannot specify both username and uid.")
 			user = self.get_users(username=username)
 			if not user:
 				raise error.NotUser("No user found named %s" % username)
 			uid = user[0]['id']
+			
+		# If groupname was passed in, get the gid
+		if groupname:
+			if gid:
+				raise Exception("You cannot specify both groupname and gid.")
+			group = self.get_groups(name=groupname)
+			if not group:
+				raise error.NotUser("No group found named %s" % groupname)
+			gid = group[0]['id']
 			
 		# Filter and make the whereclause
 		
@@ -943,6 +978,7 @@ class DBBaseInterface(object):
 			hosts = hosts.join(obj.hosts_to_groups, and_(obj.hosts.c.mac == obj.hosts_to_groups.c.mac, obj.hosts_to_groups.c.gid==gid))
 
 		if uid:
+			# FIXME: we're ignoring additional_perms/required_perms here to make this make any sense
 			hosts = hosts.join(obj.hosts_to_groups, obj.hosts.c.mac == obj.hosts_to_groups.c.mac)
 			# Make sure to bitwise OR users_to_groups.host_permissions after finding the user's group permissions
 			hosts = hosts.join(obj.users_to_groups, and_(obj.users_to_groups.c.gid==obj.hosts_to_groups.c.gid,
@@ -950,6 +986,7 @@ class DBBaseInterface(object):
 								obj.users_to_groups.c.permissions.op('|')(obj.users_to_groups.c.host_permissions).op('&')(str(perms.OWNER)) == str(perms.OWNER))))
 		else:
 			# FIXME: we should be able to include a column with effective permissions over a host and reduce some network traffic.
+			# FIXME: we should really be using the same code as find_permissions_for_hosts here
 			if not self._min_perms & required_perms == required_perms:
 				# Get our permissions over hosts
 				net_perms = obj.perm_query( self._uid, self._min_perms, networks = True, required_perms = required_perms, do_subquery=False ).alias('net_perms')
@@ -957,17 +994,29 @@ class DBBaseInterface(object):
 				# Get our permissions over networks
 				host_perms = obj.perm_query( self._uid, self._min_perms, hosts = True, required_perms = required_perms, do_subquery=False ).alias('host_perms')
 
-				hosts = hosts.outerjoin(host_perms, host_perms.c.mac == obj.hosts.c.mac)
-				hosts = hosts.outerjoin(net_perms, net_perms.c.nid == obj.addresses.c.network)
-				whereclause.append( or_( host_perms.c.permissions != None, net_perms.c.permissions != None ) )
+				# Get our permissions over domains
+				dom_perms = obj.perm_query( self._uid, self._min_perms, domains = True, required_perms = required_perms, do_subquery=False ).alias('domain_perms')
+
+				hosts = [hosts.join(host_perms, host_perms.c.mac == obj.hosts.c.mac),
+						hosts.join(net_perms, net_perms.c.nid == obj.addresses.c.network),
+						hosts.outerjoin(obj.domains, obj.hosts.c.hostname.like('%.' + obj.domains.c.name) ).join(dom_perms, obj.domains.c.id == dom_perms.c.did),
+					]
 
 				#columns.append( (sqlalchemy.sql.func.coalesce(net_perms.c.permissions,self._min_perms).op('|')(sqlalchemy.sql.func.coalesce(host_perms.c.permissions,self._min_perms))).label('effective_perms')
 
-		hosts = select(columns, from_obj=hosts, distinct=True)
 		# Finalize the WHERE clause
 		if whereclause:
 			whereclause = self._finalize_whereclause( whereclause )
+		else:
+			whereclause = True
+
+		if type(hosts) == types.ListType:
+			hosts = [ select(columns, from_obj=i, distinct=True).where(whereclause) for i in hosts ]
+			hosts = union(*hosts)
+		else:
+			hosts = select(columns, from_obj=hosts, distinct=True)
 			hosts = hosts.where(whereclause)
+
 		if self.has_min_perms( required_perms ):
 			# Funky ordering to order by length ... fixes problems with guest registrations
 			# because, technically, 11 in ASCII is before 9 in ASCII ... think about it 	
@@ -976,6 +1025,30 @@ class DBBaseInterface(object):
 			
 		return hosts
 		
+	def _find_permissions_for_objects_query(self, objects, primary_table, primary_key, bridge_table, foreign_key, alternate_perms_key=None ):
+		primary_key_name = primary_key.name
+		
+		# Create a list of primary key IDs
+		
+		if objects and (type(objects[0]) is types.DictionaryType or type(objects[0] is sqlalchemy.engine.base.RowProxy)):
+			objects_list = [object[primary_key_name] for object in objects]
+		else:
+			objects_list = objects
+			
+		if not objects_list:
+			return None, None
+		
+		# Query for the objects, LEFT joining permissions
+		fromobj = (bridge_table.join( primary_table, and_(foreign_key==primary_key, primary_key.in_(objects_list) ) )
+			.outerjoin(obj.users_to_groups, and_(obj.users_to_groups.c.gid==bridge_table.c.gid, obj.users_to_groups.c.uid == self._uid)))
+		
+		permissions_col = sqlalchemy.sql.func.coalesce(sqlalchemy.sql.func.bit_or(obj.users_to_groups.c.permissions).op('|')(str(self._min_perms)),str(self._min_perms))
+
+		if primary_key==obj.hosts.c.mac:
+			host_permissions_col = sqlalchemy.sql.func.coalesce(sqlalchemy.sql.func.bit_or(obj.users_to_groups.c.host_permissions),str(self._min_perms))
+			permissions_col = permissions_col.op('|')(host_permissions_col)
+
+		return permissions_col, fromobj
 		
 	def _find_permissions_for_objects(self, objects, primary_table, primary_key, bridge_table, foreign_key, alternate_perms_key=None ):
 		'''
@@ -993,27 +1066,14 @@ class DBBaseInterface(object):
 		primary_key's name is used. This better be a unique column or bad things may happen.
 		'''
 		
-		primary_key_name = primary_key.name
-		
-		# Create a list of primary key IDs
-		
-		if objects and (type(objects[0]) is types.DictionaryType or type(objects[0] is sqlalchemy.engine.base.RowProxy)):
-			objects_list = [object[primary_key_name] for object in objects]
-		else:
-			objects_list = objects
-			
-		if not objects_list:
+		permissions_col, fromobj = self._find_permissions_for_objects_query( objects, primary_table, primary_key, bridge_table, foreign_key, alternate_perms_key )
+		if not permissions_col or not fromobj:
 			return [{}]
-		
-		# Query for the objects, LEFT joining permissions
-		fromobj = (bridge_table.join( primary_table, and_(foreign_key==primary_key, primary_key.in_(objects_list) ) )
-			.outerjoin(obj.users_to_groups, and_(obj.users_to_groups.c.gid==bridge_table.c.gid, obj.users_to_groups.c.uid == self._uid)))
-		
-		columns = [primary_key, sqlalchemy.sql.func.coalesce(sqlalchemy.sql.func.bit_or(obj.users_to_groups.c.permissions).op('|')(str(self._min_perms)),str(self._min_perms)).label('permissions'),
-				sqlalchemy.sql.func.coalesce(sqlalchemy.sql.func.bit_or(obj.users_to_groups.c.host_permissions).op('|')(str(self._min_perms)),str(self._min_perms)).label('host_permissions')]
-		
+
+		columns = [primary_key, permissions_col.label('permissions') ]
+
 		if alternate_perms_key:
-			columns += [alternate_perms_key]
+			columns.append(alternate_perms_key)
 		
 		query = select(columns, from_obj=fromobj).group_by(primary_key)
 		if alternate_perms_key:
@@ -1024,23 +1084,10 @@ class DBBaseInterface(object):
 		permissions = {}
 		
 		# If the alternate_perms_key is specified, use that for our permissions object
-		perms_key_name = alternate_perms_key.name if alternate_perms_key else primary_key_name
+		perms_key_name = alternate_perms_key.name if alternate_perms_key else primary_key.name
 		
-		# Initialize the permissions dictionary with my min_perms for every element
-		# DELETEME: the DB is doing this now
-		#for row in results:
-		#	permissions[row[perms_key_name]] = str(self._min_perms)
-		
-		# This section inherently takes care of having permissions to an object via multiple groups
-		# ie. A host can be in multiple groups and the final permissions you have over that host
-		# is a bitwise OR of ALL of those permission sets (and your min_permissions)
 		for row in results:
-			# Because we LEFT JOINed, row['permissions'] will be NULL if we don't have group access over this object 
-			# FIXME: is it reasonable to | in host_permissions here?  (ie. is this only used for hosts?)
-			if permissions.has_key(row[perms_key_name]):
-				permissions[row[perms_key_name]] = str(Perms(row['permissions']) | row['host_permissions'] | permissions[row[perms_key_name]])
-			else:
-				permissions[row[perms_key_name]] = str(Perms(row['permissions']) | row['host_permissions'])
+			permissions[row[perms_key_name]] = row['permissions']
 			
 		# FIXME: why are we making a list of length 1?
 		return [permissions]
@@ -1054,7 +1101,52 @@ class DBBaseInterface(object):
 		The dictionary must have 'mac' key, all others keys are not used
 		'''
 		
-		return self._find_permissions_for_objects(objects=hosts, primary_table=obj.hosts, primary_key=obj.hosts.c.mac, bridge_table=obj.hosts_to_groups, foreign_key=obj.hosts_to_groups.c.mac, alternate_perms_key=alternate_perms_key)
+		primary_key=obj.hosts.c.mac
+
+		permissions_col, fromobj = self._find_permissions_for_objects_query(objects=hosts, primary_table=obj.hosts, primary_key=primary_key, bridge_table=obj.hosts_to_groups, foreign_key=obj.hosts_to_groups.c.mac, alternate_perms_key=alternate_perms_key)
+		if not permissions_col or not fromobj:
+			return [{}]
+
+		dom_u2g = obj.users_to_groups.alias('domain_users_to_groups')
+		dom_u2g2d = dom_u2g.join(obj.domains_to_groups, and_(dom_u2g.c.gid == obj.domains_to_groups.c.gid, dom_u2g.c.uid == self._uid ))
+
+		fromobj = fromobj.outerjoin( obj.domains, obj.hosts.c.hostname.like('%.' + obj.domains.c.name) )
+	
+		fromobj = fromobj.outerjoin(dom_u2g2d, obj.domains_to_groups.c.did == obj.domains.c.id)
+
+		# Bad order!
+		#fromobj = fromobj.outerjoin( obj.domains_to_groups, obj.domains_to_groups.c.did == obj.domains.c.id )
+		#fromobj = fromobj.outerjoin( dom_u2g, and_(dom_u2g.c.gid == obj.domains_to_groups.c.gid, dom_u2g.c.uid == self._uid ))
+
+		# Do _not_ or in the 'host_perms' here, or everyone will be able to mess with everything.
+		dom_permissions_col = sqlalchemy.sql.func.coalesce( sqlalchemy.sql.func.bit_or(dom_u2g.c.permissions), str(self._min_perms))
+		permissions_col = permissions_col.op('|')(dom_permissions_col)
+
+		columns = [primary_key, permissions_col.label('permissions'), dom_permissions_col.label('meh') ]
+
+		if alternate_perms_key:
+			columns.append(alternate_perms_key)
+		
+		query = select(columns, from_obj=fromobj).group_by(primary_key)
+		if alternate_perms_key:
+			query = query.group_by(alternate_perms_key)
+
+		#debug = select( [primary_key, dom_u2g.c.permissions, dom_u2g.c.uid, dom_u2g.c.gid, obj.hosts.c.hostname, obj.domains.c.name], from_obj=fromobj )
+		#print self._execute(debug)
+		
+		results = self._execute(query)
+		#print results
+		
+		permissions = {}
+		
+		# If the alternate_perms_key is specified, use that for our permissions object
+		perms_key_name = alternate_perms_key.name if alternate_perms_key else primary_key.name
+		
+		for row in results:
+			permissions[row[perms_key_name]] = row['permissions']
+			
+		# FIXME: why are we making a list of length 1?
+		return [permissions]
 	
 	def find_permissions_for_domains(self, domains, alternate_perms_key=None):
 		'''
@@ -1997,6 +2089,11 @@ class DBInterface( DBBaseInterface ):
 		if self.is_disabled(mac=mac):
 			raise error.InvalidArgument('This host is disabled (mac: %s)' % mac)
 
+		if dhcp_group:
+			dhcp_group = int(dhcp_group)
+		else:
+			dhcp_group = None
+
 		self._begin_transaction()
 		try:
 			# Check permissions
@@ -2121,7 +2218,7 @@ class DBInterface( DBBaseInterface ):
 		try:
 			if not self.has_min_perms(perms.ADD):
 				if address:
-					andwhere = obj.networks_to_groups.c.nid.op('<<=')(str(address))
+					andwhere = obj.networks_to_groups.c.nid.op('>>=')(str(address))
 				else:
 					andwhere = obj.networks_to_groups.c.nid == str(network)
 				net_perms = obj.perm_query( self._uid, self._min_perms, networks = True, required_perms = perms.ADD, do_subquery=False,
@@ -2129,7 +2226,7 @@ class DBInterface( DBBaseInterface ):
 				net_perms = self._execute(net_perms)
 			
 				if not net_perms:
-					raise error.InsufficientPermissions("Insufficient permissions to add a host to the %s network." % network)
+					raise error.InsufficientPermissions("Insufficient permissions to add a host to the %s network (address: %s)." % (network,address))
 			
 			query = select([obj.addresses.c.address], and_(and_(obj.addresses.c.mac == None, obj.addresses.c.pool == None), obj.addresses.c.reserved == False))
 
@@ -2169,8 +2266,8 @@ class DBInterface( DBBaseInterface ):
 					if network:
 						query = query.where(obj.addresses.c.address.op('<<')(str(network))).order_by(obj.addresses.c.address)
 					
-					# Only show expired leases
-					query = query.where(or_(obj.leases.c.ends < sqlalchemy.sql.func.now(), obj.leases.c.ends == None))
+					# Only show expired or owned leases
+					query = query.where(or_(or_(obj.leases.c.ends < sqlalchemy.sql.func.now(), obj.leases.c.ends == None),obj.leases.c.mac == mac))
 					
 					if address:
 						query = query.where(obj.addresses.c.address == str(address))
@@ -2231,14 +2328,16 @@ class DBInterface( DBBaseInterface ):
 		
 		# The MAC address associated with this IP address
 		mac = addresses[0]['mac']
-		
-		host = self.get_hosts(mac=mac)
-		
-		if not host:
-			raise error.NotFound("No host found for MAC %s in release_static_address" % mac)
-		
-		# Require MODIFY over the host that is using this address
-		self._require_perms_on_host(permission=perms.MODIFY, mac=mac, error_msg="Insufficient permissions to release static address %s for MAC %s" % (address, mac))
+
+		if not self.has_min_perms(perms.DEITY):
+			
+			host = self.get_hosts(mac=mac)
+			
+			if not host:
+				raise error.NotFound("No host found for MAC %s in release_static_address" % mac)
+			
+			# Require MODIFY over the host that is using this address
+			self._require_perms_on_host(permission=perms.MODIFY, mac=mac, error_msg="Insufficient permissions to release static address %s for MAC %s" % (address, mac))
 		
 		if not address:
 			raise error.RequiredArgument("address is required in release_static_address")
@@ -2363,7 +2462,7 @@ class DBInterface( DBBaseInterface ):
 			if not ip4 and net.prefixlen() != 64:
 				raise Exception('Are you really trying to allocate a network that isn\'t a /64?')
 			if pool and not ip4:
-				raise Exception('Pools are only used for IPv4 addresses.')
+				raise Exception('Pools are only used for IPv4 addresses; net=%s' % net)
 		
 		# Check if this network overlaps with another network
 		self._begin_transaction()
@@ -2438,8 +2537,8 @@ class DBInterface( DBBaseInterface ):
 		ip4 = net.version() == 4
 		if not ip4 and net.prefixlen() != 64:
 			raise Exception('Are you really trying to allocate a network that isn\'t a /64?')
-		if pool and ip4:
-			raise Exception('Pools are only used for IPv4 addresses.')
+		if pool and not ip4:
+			raise Exception('Pools are only used for IPv4 addresses. net: %s' % net)
 			
 		
 		# Check if this network overlaps with another network
@@ -2463,9 +2562,8 @@ class DBInterface( DBBaseInterface ):
 									'changed_by' : self._uid } )
 			result = self._execute_set( query )
 			
-			invalid = [ net[0], net[backend.default_gateway_address_index], net.broadcast(), ] # mark gateways as reserved, although we should assign the mac of the router
-
 			if ip4:
+				invalid = [ net[0], net[backend.default_gateway_address_index], net.broadcast(), ] # mark gateways as reserved, although we should assign the mac of the router
 				for address in net:
 					if (address not in invalid) or (net.prefixlen() >= 31):
 						# If address is not invalid or in a /31 or /32, add the address as unreserved
@@ -2477,9 +2575,14 @@ class DBInterface( DBBaseInterface ):
 						self.add_address( address = str( address ), network=network, pool = addr_pool )
 					else:
 						self.add_address( address = str( address ), network=network, pool = None, reserved=True )
-			else:
+			else: #ipv6
+				router_index = 1
+				if hasattr(backend,"devault_gateway_address_index_v6"):
+					router_index = backend.devault_gateway_address_index_v6
+				invalid = [ net[0], net[router_index], ]
+
 				# FIXME: IPv6: reserve our router/network addresses here
-				for address in invalid:
+				for address in invalid: # we do sparse addressing for ipv6.  This is very important.
 					self.add_address(address=address, network=network, reserved=True)
 			
 			self._commit()
@@ -2844,7 +2947,7 @@ class DBInterface( DBBaseInterface ):
 			self._do_delete( table=obj.addresses, where=obj.addresses.c.address.op("<<")(network) )
 			
 			# Delete the network
-			where = obj.netwoks.c.network == network
+			where = obj.networks.c.network == network
 			result = self._do_delete( table=obj.networks, where=where )
 			
 			self._commit()
@@ -2867,8 +2970,9 @@ class DBInterface( DBBaseInterface ):
 		self.require_perms(perms.DEITY)
 
 		where = and_(obj.networks_to_groups.c.nid==nid, obj.networks_to_groups.c.gid==gid)
+		s = obj.networks_to_groups.delete( whereclause=where )
 
-		return self._execute_delete( table=obj.networks_to_groups, where=where)
+		return self._execute_set( s )
 	
 	def del_notification_to_host( self, id=None, mac=None ):
 		"""
@@ -2969,7 +3073,7 @@ class DBInterface( DBBaseInterface ):
 				self.add_notification_to_host(notify_type['id'], mac)
 	
 	# FIXME: this function should require and id from expiration_types instead of an expiration date
-	def update_host( self, old_mac, mac=None, hostname=None, description=None, expires=None, expiration_format=None ):
+	def update_host( self, old_mac, mac=None, hostname=None, description=None, expires=None, dhcp_group=None, expiration_format=None ):
 		"""
 		Update a host record ... just a host record.
 		No arguments are required except for old_mac ... whatever is passed in
@@ -2987,6 +3091,12 @@ class DBInterface( DBBaseInterface ):
 
 		if not old_mac:
 			raise error.InvalidArgument('Invalid MAC address for old_mac: %s' % old_mac)
+
+		if dhcp_group:
+			dhcp_group = int(dhcp_group)
+		else:
+			dhcp_group = None
+
 		
 		# Require MODIFY permissions if not DEITY
 		if not self.has_min_perms(perms.DEITY):
@@ -2998,10 +3108,10 @@ class DBInterface( DBBaseInterface ):
 		# Doing a for loop instead of if mac: values['mac'] = ..., if hostname: values['hostname'] = ... for every one
 		# Because Python is just cool like that
 		args = locals()
-		for arg in args:
-			if arg in ('mac', 'hostname', 'description', 'expires') and args[arg] != None:
+		for arg in ('mac', 'hostname', 'dhcp_group', 'description', 'expires'):
+			if args.has_key(arg) and args[arg] != None:
 				values[arg] = args[arg]
-				
+		
 		values['changed'] = sqlalchemy.sql.func.now()
 		values['changed_by'] = self._uid
 		
@@ -3018,7 +3128,9 @@ class DBInterface( DBBaseInterface ):
 	
 	# FIXME: this function should require and id from expiration_types instead of an expiration date
 	# FIXME: trash this function and replace it with smaller ones.
-	def change_registration( self, old_mac, mac=None, hostname=None, description=None, expires=None, expiration_format=None, is_dynamic=True, network=None, address=None, owners=None ):
+	def change_registration( self, old_mac, mac=None, hostname=None, description=None,
+			expires=None, expiration_format=None, is_dynamic=True, network=None,
+			address=None, owners=None, dhcp_group=None ):
 		"""
 		The continuation of register_host ... this is a smart function that will update
 		everything required if a registration needs to change.
@@ -3032,8 +3144,9 @@ class DBInterface( DBBaseInterface ):
 		# Check permissions
 		required_perms = perms.MODIFY
 		# Require the ADMIN flag to change permissions
-		if owners:
-			required_perms = perms.OWNER
+		# FYI: handled by set_owners_for_host(...)
+		#if owners:
+		#	required_perms = perms.OWNER
 
 		if address and network:
 			network = openipam.iptypes.IP(network)
@@ -3086,7 +3199,7 @@ class DBInterface( DBBaseInterface ):
 				# STAYING DYNAMIC REGISTRATION
 				
 				# Update the host row information
-				self.update_host(old_mac=old_mac, mac=mac, hostname=hostname, description=description, expires=expires, expiration_format=expiration_format)
+				self.update_host(old_mac=old_mac, mac=mac, hostname=hostname, description=description, expires=expires, expiration_format=expiration_format, dhcp_group=dhcp_group)
 				
 			elif not is_dynamic and was_dynamic:
 				# FIXME: Deleting the host is not an expected behavior.
@@ -3137,14 +3250,14 @@ class DBInterface( DBBaseInterface ):
 					hostname = hostname if hostname else old_host['hostname']
 					
 					# Update the host row information
-					self.update_host(old_mac=old_mac, mac=mac, hostname=hostname, description=description, expires=expires, expiration_format=expiration_format)
+					self.update_host(old_mac=old_mac, mac=mac, hostname=hostname, description=description, expires=expires, expiration_format=expiration_format, dhcp_group=dhcp_group)
 					
 					# Done changing IP address
 				else:
 					# Not changing the IP address
 					
 					# Update the host row information
-					self.update_host(old_mac=old_mac, mac=mac, hostname=hostname, description=description, expires=expires, expiration_format=expiration_format)
+					self.update_host(old_mac=old_mac, mac=mac, hostname=hostname, description=description, expires=expires, expiration_format=expiration_format, dhcp_group=dhcp_group)
 					
 				if hostname:
 					# FIXME: does this fix any PTRs that might exist?
@@ -3156,26 +3269,51 @@ class DBInterface( DBBaseInterface ):
 				
 			# At this point, the MAC address has been updated if it's changed ... so let's set the variable for future use
 			mac = (mac if mac else old_mac)
+
 			
 			# Update owners in every state if it is specified
 			if owners:
-				# Find which owners have been deleted or added
-				old_owners = self.find_owners_of_host(mac=mac)
-				old_owner_names = [row['name'] for row in old_owners]
+				self.set_owners_for_host(mac=mac, owner_names=owners)
 
-				# Wow, there's got to be a more pythonic way of doing this. Anyone?
-				for new_owner in owners:
-					# Make sure it actually exists and is not ''
-					if new_owner and new_owner not in old_owner_names:
-						self.add_host_to_group(mac=mac, group_name=new_owner)
-				for old_owner in old_owners:
-					if old_owner['name'] not in owners:
-						self.del_host_to_group(mac=mac, gid=old_owner['id'])
-					 
 			self._commit()
 		except:
 			self._rollback()
 			raise
+
+	def set_owners_for_host(self, mac, owner_ids=None, owner_names=None):
+		self._require_perms_on_host(mac=mac, permission=perms.OWNER)
+
+		if ( (owner_ids == None and owner_names == None)
+				or not (owner_ids == None or owner_names == None) ):
+			raise error.InvalidArgument("Must specify exactly one of (owner_ids, owner_names) = (%s,%s)" % (owner_ids,owner_names) )
+
+		if not owner_ids:
+			new_owner_ids = set()
+			for name in owner_names:
+				if name:
+					g = self.get_groups(name=name)
+					print g
+					new_owner_ids.add( int(g[0]['id']) )
+		else:
+			new_owner_ids = set(owner_ids)
+
+
+		# Find which owners have been deleted or added
+		old_owners = self.get_hosts_to_groups(mac=mac)
+		old_owner_ids = set([int(row['gid']) for row in old_owners])
+
+		if not new_owner_ids:
+			raise error.InvalidArgument("Host must have at least one owner -- mac: %s owners: %s" % (mac,owners))
+
+		print new_owner_ids, old_owner_ids
+		# Wow, there's got to be a more pythonic way of doing this. Anyone?
+		for new_owner in new_owner_ids.difference(old_owner_ids):
+			print "adding %s" % new_owner
+			# Make sure it actually exists and is not ''
+			self.add_host_to_group(mac=mac, gid=new_owner)
+		for old_owner in old_owner_ids.difference(new_owner_ids):
+			print "deleting %s" % old_owner
+			self.del_host_to_group(mac=mac, gid=old_owner)
 
 	def update_dhcp_group( self, gid, name, description ):
 		'''Update a DHCP Group's information
@@ -3323,7 +3461,7 @@ class DBInterface( DBBaseInterface ):
 		'''Disable a host for the given reason'''
 
 		# Check permissions
-		self.require_perms(perms.OWNER)
+		self.require_perms(perms.SECURITY)
 		
 		query = obj.disabled.insert( values={'mac' : mac,
 								'reason' : reason,
@@ -3335,7 +3473,7 @@ class DBInterface( DBBaseInterface ):
 		'''Disable a host for the given reason'''
 
 		# Check permissions
-		self.require_perms(perms.OWNER)
+		self.require_perms(perms.SECURITY)
 
 		return self._do_delete( table=obj.disabled, where=obj.disabled.c.mac==mac )
 
@@ -3366,6 +3504,25 @@ class DBInterface( DBBaseInterface ):
 				if not mac:
 					raise error.InvalidArgument('Invalid MAC address: %s in host list %s' % (mac,hosts) )
 				self.del_host( mac=mac )
+			self._commit()
+		except:
+			self._rollback
+			raise
+
+	def change_hosts(self, hosts, owners):
+		# Renew the given hosts until 1 year from now.
+		if not hosts:
+			raise error.InvalidArgument('No hosts specified.')
+		if not owners:
+			raise error.InvalidArgument('No owners specified.')
+
+		# I hope you know what you are doing here...
+		self._begin_transaction()
+		try:
+			for mac in hosts:
+				if not mac:
+					raise error.InvalidArgument('Invalid MAC address: %s in host list %s' % (mac,hosts) )
+				self.set_owners_for_host( mac=mac, owner_names=owners )
 			self._commit()
 		except:
 			self._rollback
@@ -3520,7 +3677,7 @@ class DBDHCPInterface(DBInterface):
 												) )
 			self._execute_set(query)
 			
-			query = select([obj.leases,((sqlalchemy.sql.func.now() - obj.leases.c.starts) < text("interval '%s sec'" % min_lease_age)).label('recent')], obj.leases.c.mac==mac)
+			query = select([obj.leases,((sqlalchemy.sql.func.now() - obj.leases.c.starts) < text("interval '%s sec'" % min_lease_age)).label('recent'),(text('extract( epoch from leases.ends - NOW() )::int AS time_left'))], obj.leases.c.mac==mac)
 			result = self._execute(query)
 			
 			# If this lease is < 10 seconds old, don't bother updating it
@@ -3529,13 +3686,16 @@ class DBDHCPInterface(DBInterface):
 					'address':address,
 					#'starts':sqlalchemy.sql.func.now(), # Doesn't really matter, since we are extending a lease; RIGHT?
 					'server':self.server_ip,
-					'ends':sqlalchemy.sql.func.now() + text("interval '%s sec'" % expires)
+					'ends':sqlalchemy.sql.func.now() + text("interval '%s sec'" % (expires + 300) ) # store an extra 5 minutes on the lease to reduce writes caused by stupid client software
 					}
 			# select * from leases where mac = mac, if exists: update where starts < NOW()-10 sec else, insert.
 			if result:
-				if result[0]['recent']:
-					if self.debug:
+				if result[0]['recent'] or result[0]['time_left'] > expires:
+					# do nothing
+					if self.debug and result[0]['recent']:
 						print "Recent match (< %s s old) found: %s" % (min_lease_age,str(result))
+					else:
+						print "Longer existing lease found (requested %s): %s" % (expires,str(result))
 					self._commit()
 					return result
 				query = obj.leases.update(and_(obj.leases.c.mac==mac, obj.leases.c.starts < ago(min_lease_age) ),
@@ -3612,7 +3772,7 @@ class DBDHCPInterface(DBInterface):
 		address = None
 		lease_time = None
 		#if discover:
-		#	lease_time = 600 # Give the client 30 seconds to respond to our offer
+		#	lease_time = 60 # Give the client lease_time seconds to respond to our offer
 			
 		# False for static addresses
 		make_lease = True
@@ -3830,8 +3990,10 @@ class DBDHCPInterface(DBInterface):
 
 			# FIXME: we should check lease_time here, but oh well
 			self.update_or_create_lease_and_delete_conflicting(mac, address['address'], lease_time)
-			
-		return make_lease_dict( address, random.randrange( lease_time*2/3, lease_time ), hostname )
+		
+		# This probably doesn't gain us anything, since clients should renew at random intervals anyway
+		#return make_lease_dict( address, random.randrange( lease_time*2/3, lease_time ), hostname )
+		return make_lease_dict( address, lease_time, hostname )
 
 	def mark_abandoned_lease(self, address=None, mac=None):
 		whereclause = None
