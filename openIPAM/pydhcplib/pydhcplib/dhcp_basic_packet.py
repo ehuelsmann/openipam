@@ -209,7 +209,7 @@ class DhcpBasicPacket:
         for each in self.options_data.keys() :
             options.append(DhcpOptions[each])
             options.append(len(self.options_data[each]))
-	    options.extend(self.options_data[each])
+            options.extend(self.options_data[each])
             if DhcpOptions[each] == 67:
                 # we have a bunch of crap that reuse buffers they shouldn't,
                 #   so add a null for them here
@@ -217,14 +217,11 @@ class DhcpBasicPacket:
 
         packet = self.packet_data[:240] + options
         packet.append(255) # add end option
+	pktlen = len(packet)
+	if pktlen < 300:
+		packet.extend([0] * (300-pktlen)) # RFC says min packet size is 300
 
         packet = map(chr,packet)
-
-        if len(packet) < 342:
-            packet += '\0' * ( 300 - len(packet) )
-        delta = len(packet) % 4
-        if delta:
-            packet += '\0' * delta
 
         pack_fmt = str(len(packet))+"c"
         
