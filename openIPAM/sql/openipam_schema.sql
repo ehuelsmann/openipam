@@ -43,11 +43,24 @@ CREATE TABLE users (
 	min_permissions	BIT(8) NOT NULL DEFAULT B'00000000' REFERENCES permissions(id) ON DELETE RESTRICT
 );
 
+
+CREATE TABLE internal_auth(
+	-- Use for users not in LDAP
+	id				integer PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+	hash			varchar NOT NULL,
+	name			varchar, -- Users full name
+	email			varchar, -- User's email address
+	changed			timestamp DEFAULT NOW(),
+	changed_by		integer NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+);
+
+
 -- FIXME: Trim this list down, we may not need the dhcp user 
 INSERT INTO users (username, source, min_permissions) VALUES ('admin', 1, B'11111111');
 INSERT INTO users (username, source, min_permissions) VALUES ('dhcp', 1, B'11111111');
 INSERT INTO users (username, source, min_permissions) VALUES ('auth', 1, B'11111111');
 INSERT INTO users (username, source, min_permissions) VALUES ('guest', 1, B'00000100');
+
 
 CREATE TABLE groups(
 	-- These groups are used for user groups, host groups, permissions, etc.
@@ -59,13 +72,13 @@ CREATE TABLE groups(
 	changed_by		integer NOT NULL REFERENCES users(id) ON DELETE RESTRICT
 );
 
-INSERT INTO groups (name, description) VALUES ('default', 'The default group for all dynamic domains and member objects. Do not change.');
-INSERT INTO groups (name, description) VALUES ('guests', 'The default group for all guest domains and member objects. Do not change.');
-INSERT INTO groups (name, description) VALUES ('service', 'A service group for special permissions.');
-INSERT INTO groups (name, description) VALUES ('user_admin', 'Default group for this user');
-INSERT INTO groups (name, description) VALUES ('user_import', 'Default group for this user');
-INSERT INTO groups (name, description) VALUES ('user_pdns', 'Default group for this user');
-INSERT INTO groups (name, description) VALUES ('user_dhcp', 'Default group for this user');
+INSERT INTO groups (name, description, changed_by) VALUES ('default', 'The default group for all dynamic domains and member objects. Do not change.', 1);
+INSERT INTO groups (name, description, changed_by) VALUES ('guests', 'The default group for all guest domains and member objects. Do not change.', 1);
+INSERT INTO groups (name, description, changed_by) VALUES ('service', 'A service group for special permissions.', 1);
+INSERT INTO groups (name, description, changed_by) VALUES ('user_admin', 'Default group for this user', 1);
+INSERT INTO groups (name, description, changed_by) VALUES ('user_import', 'Default group for this user', 1);
+INSERT INTO groups (name, description, changed_by) VALUES ('user_pdns', 'Default group for this user', 1);
+INSERT INTO groups (name, description, changed_by) VALUES ('user_dhcp', 'Default group for this user', 1);
 
 CREATE TABLE users_to_groups(
 	id				SERIAL PRIMARY KEY,
@@ -79,16 +92,6 @@ CREATE TABLE users_to_groups(
 );
 
 CREATE INDEX users_to_groups_uid_gid_index ON users_to_groups( uid, gid);
-
-CREATE TABLE internal_auth(
-	-- Use for users not in LDAP
-	id				integer PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
-	hash			varchar NOT NULL,
-	name			varchar, -- Users full name
-	email			varchar, -- User's email address
-	changed			timestamp DEFAULT NOW(),
-	changed_by		integer NOT NULL REFERENCES users(id) ON DELETE RESTRICT
-);
 
 CREATE TABLE dhcp_groups (
 	-- Groups used to determine which DHCP options should apply to a given host
@@ -366,13 +369,13 @@ CREATE TABLE structured_attribute_values (
 CREATE TABLE structured_attributes_to_hosts (
 	id				SERIAL PRIMARY KEY,
 	mac				MACADDR NOT NULL REFERENCES hosts(mac) ON DELETE CASCADE ON UPDATE CASCADE,
-	avid				integer REFERENCES attribute_values(id) NOT NULL,
+	avid				integer REFERENCES structured_attribute_values(id) NOT NULL,
 	changed			timestamp DEFAULT NOW(),
 	changed_by		integer NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
 	UNIQUE(mac,avid)
 );
 
-CREATE UNIQUE INDEX structured_attributes_to_hosts_unique_default_idx ON structured_attributes_to_hosts(avid) WHERE is_default = TRUE;
+CREATE UNIQUE INDEX structured_attributes_to_hosts_unique_default_idx ON structured_attributes_to_hosts(avid);
 
 CREATE TABLE freeform_attributes_to_hosts (
 	id				SERIAL PRIMARY KEY,
@@ -389,16 +392,16 @@ CREATE VIEW attributes_to_hosts AS
         (SELECT a.id as aid, a.name as name, a.structured, a.required,
                         sa2h.mac, sa2h.avid, sav.value
                 FROM attributes a
-                JOIN structured_attribute_values sav
+                INNER JOIN structured_attribute_values sav
                         ON sav.aid = a.id
-                JOIN structured_attributes_to_hosts sa2h
+                INNER JOIN structured_attributes_to_hosts sa2h
                         ON sav.id = sa2h.avid
         )
         UNION
         (SELECT a.id as aid, a.name as name, a.structured, a.required,
                         fa2h.mac, NULL as avid, fa2h.value
                 FROM attributes a
-                JOIN freeform_attributes_to_hosts fa2h
+                INNER JOIN freeform_attributes_to_hosts fa2h
                         ON a.id = fa2h.aid
         )
 );
