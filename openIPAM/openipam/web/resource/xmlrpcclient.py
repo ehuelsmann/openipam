@@ -3,6 +3,7 @@ import base64
 import xmlrpclib
 import urllib2
 import cookielib
+import httplib
 
 import pickle
 
@@ -27,52 +28,40 @@ class PickleCookieJar( cookielib.CookieJar ):
                 for cookie_str in cookie_list:
 			self.set_cookie( pickle.loads( cookie_str ) )
 
+class ResponseWrapper():
+	_response = None
+
+	def __init__(self, response):
+		self._response = response
+
+	def info(self):
+		return self
+
+	def getheaders(self, name):
+		return [item for item in self._response.getheaders()
+			if item[0] == name]
+
+
 class CookieAuthXMLRPCSafeTransport(xmlrpclib.Transport):
 	"""xmlrpclib.Transport that sends HTTP(S) Authentication"""
 
-	user_agent = '*py*'
-	credentials = ()
-	cj=None
-	transport = 'https'
+	cj = None
 	ssl = True
 	_extra_headers = None
+	_host = None
 	
 	def __init__(self, cookiejar=None, ssl=True, use_datetime=True):
 		xmlrpclib.Transport.__init__(self, use_datetime=use_datetime)
 		if not ssl:
 			self.ssl = False
-			self.transport = 'http'
 
 		if cookiejar:
 			self.cj = cookiejar
 		else:
 			self.cj = PickleCookieJar()
 
-	def make_connection(self, host):
-		# create a HTTPS connection object from a host descriptor
-		# host may be a string, or a (host, x509-dict) tuple
-		if not self.ssl:
-			return xmlrpclib.Transport.make_connection( self, host )
-		import httplib
-		host, extra_headers, x509 = self.get_host_info(host)
-		try:
-			HTTPS = httplib.HTTPS
-		except AttributeError:
-			raise NotImplementedError(
-				"your version of httplib doesn't support HTTPS"
-				)
-		else:
-			return HTTPS(host, None, **(x509 or {}))
-
 	def get_cookiejar(self):
 		return self.cj
-
-	def send_basic_auth(self, connection):
-		"""Include HTTP Basic Authentication data in a header"""
-		
-		auth = base64.encodestring("%s:%s"%self.credentials).strip()
-		auth = 'Basic %s' %(auth,)
-		connection.putheader('Authorization',auth)
 
 	def send_cookie_auth(self, connection):
 		"""Include Cookie Authentication data in a header"""
@@ -81,56 +70,20 @@ class CookieAuthXMLRPCSafeTransport(xmlrpclib.Transport):
 				uuidstr = cookie.value
 			connection.putheader("Cookie",cookie.name+'='+cookie.value)
 
-	## override the send_host hook to also send authentication info
 	def send_host(self, connection, host):
-		xmlrpclib.Transport.send_host(self, connection, host)
-		if self.cj:
-			self.send_cookie_auth(connection)
-#		elif self.credentials != ():
-#			self.send_basic_auth(connection)
-				
-	def request(self, host, handler, request_body, verbose=0):
-		# dummy request class for extracting cookies 
-		class CookieRequest(urllib2.Request):
-			pass
-			
-		# dummy response class for extracting cookies 
-		class CookieResponse:
-			def __init__(self, headers):
-				self.headers = headers
-			def info(self):
-				return self.headers 
+		self.send_cookie_auth(connection)
+		self._host = host
 
-		crequest = CookieRequest('%s://%s/' % (self.transport,host))
-			
-		# issue XML-RPC request
-		h = self.make_connection(host)
-		if verbose:
-			h.set_debuglevel(1)
+		return xmlrpclib.Transport.send_host(self, connection, host)
 
-		self.send_request(h, handler, request_body)
-		self.send_host(h, host)
-		self.send_user_agent(h)
+	def parse_response(self, response):
+		if self.ssl:
+			req = urllib2.Request('https://%s/' % self._host)
+		else:
+			req = urllib2.Request('http://%s/' % self._host)
+
+		self.cj.extract_cookies(ResponseWrapper(response), req)
 		
-		# creating a cookie jar for my cookies
-		if self.cj == None:
-			raise error.NotFound("Lost self.cj")
-					
-		self.send_content(h, request_body)
-			
-		errcode, errmsg, headers = h.getreply()
+		return xmlrpclib.Transport.parse_response(self, response)
 
-		cresponse = CookieResponse(headers)
-		self.cj.extract_cookies(cresponse, crequest)
-
-		if errcode != 200:
-			raise xmlrpclib.ProtocolError(
-				host + handler,
-				errcode, errmsg,
-				headers
-				)
-
-		self.verbose = verbose
-				
-		return self.parse_response(h.getfile())
 
