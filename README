@@ -13,6 +13,10 @@ both with and without SSL on the XML-RPC server and web frontend --
 we found that without SSL it currently doesn't work.
 
 
+Feel free to create issues at
+     https://github.com/ehuelsmann/openipam/issues
+
+
 
 Original project
 ================
