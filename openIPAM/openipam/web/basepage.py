@@ -41,11 +41,11 @@ class BasePage(object):
 	def __do_logout(self):
 		cherrypy.session.acquire_lock()
 		try:
-#			cherrypy.lib.sessions.expire()
+			cherrypy.lib.sessions.expire()
 			cherrypy.session.delete()
 
-#			if cherrypy.session.has_key('username'):
-#				raise error.FatalException("Still have session username ... this shouldn't ever happen ... please tell the openIPAM developers about this error and the conditions under which it happened.")
+			if cherrypy.session.has_key('username'):
+				raise error.FatalException("Still have session username ... this shouldn't ever happen ... please tell the openIPAM developers about this error and the conditions under which it happened.")
 		finally:
 			cherrypy.session.release_lock()
 			try:
@@ -75,10 +75,9 @@ class BasePage(object):
 
 
 		if not logging_in and not have_username:
-			print "NOT LOGGING IN WITHOUT USER NAME"
+			print "NOT LOGGING IN, YET NO USER NAME"
 			print cherrypy.session.keys()
 			self.redirect("/login")
-			return
 
 		# FIXME: there has to be a better way...
 		if not logging_in and not self.webservice.have_session():
@@ -127,7 +126,7 @@ class BasePage(object):
 	def logged_in(self):
 		cherrypy.session.acquire_lock()
 		try:
-			return cherrypy.session.has_key('cookies')
+			return cherrypy.session.has_key('username')
 		finally:
 			cherrypy.session.release_lock()
 		return False
