@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+Paradigm completeness
+=====================
+
+Missing from the web-interface are:
+
+ * Pools
+ * Supermasters
+ * Relationships between components
+   - DNS to Domains
+   - Pools to networks
+   - Dynamic IPs to DNS
+
+
+
+

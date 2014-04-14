@@ -1,0 +1,13 @@
+
+
+Items to be addressed:
+
+ * Unclear 'Type' field in 'Add domain' handling which -when filled-
+   crashes the backend
+
+ * More documentation everywhere
+
+
+ * Remove the need for server side webservice handling:
+   create a heavier browser client which calls the webservices
+   directly
