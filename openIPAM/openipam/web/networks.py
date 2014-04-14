@@ -122,11 +122,11 @@ class Networks(BasePage):
 			 
 			 <input type="hidden" name="nid" value="''' + str(nid) + '''" />
 			 
-			 <!--
+			 
 			 <div class="submit">
 				<input type="submit" class="button" value="''' + action_string + ''' Network">
 			 </div>
-			 -->
+			
 			 
 		  </form>'''
 		  
