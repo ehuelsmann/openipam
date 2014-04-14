@@ -7,6 +7,13 @@ Items to be addressed:
 
  * More documentation everywhere
 
+ * Installation script / installation checks "from the web"
+
+ * Reorganize screens
+   - put SOA, PTR and NS records in Domains screen
+   - manage IP address pools from Networks screen
+     (networks.py::network_form --> mentions "add DHCP groups"???)
+   - create clear relationship between "Hosts" screen, Manage DNS and Domains
 
  * Remove the need for server side webservice handling:
    create a heavier browser client which calls the webservices
