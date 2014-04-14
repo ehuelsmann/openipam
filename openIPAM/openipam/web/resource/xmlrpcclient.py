@@ -4,6 +4,7 @@ import xmlrpclib
 import urllib2
 import cookielib
 import httplib
+import cherrypy
 
 import pickle
 
@@ -38,8 +39,10 @@ class ResponseWrapper():
 		return self
 
 	def getheaders(self, name):
-		return [item for item in self._response.getheaders()
-			if item[0] == name]
+		name = name.lower()
+
+		return [item[1] for item in self._response.getheaders()
+			if item[0].lower() == name]
 
 
 class CookieAuthXMLRPCSafeTransport(xmlrpclib.Transport):
@@ -57,6 +60,9 @@ class CookieAuthXMLRPCSafeTransport(xmlrpclib.Transport):
 
 		if cookiejar:
 			self.cj = cookiejar
+		elif cherrypy.session.has_key('cookies'):
+			print "RELOADING COOKIES"
+			self.cj = pickle.loads(cherrypy.session['cookies'])
 		else:
 			self.cj = PickleCookieJar()
 
@@ -83,6 +89,7 @@ class CookieAuthXMLRPCSafeTransport(xmlrpclib.Transport):
 			req = urllib2.Request('http://%s/' % self._host)
 
 		self.cj.extract_cookies(ResponseWrapper(response), req)
+		cherrypy.session['cookies'] = pickle.dumps(self.cj)
 		
 		return xmlrpclib.Transport.parse_response(self, response)
 

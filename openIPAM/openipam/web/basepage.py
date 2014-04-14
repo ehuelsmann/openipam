@@ -41,11 +41,11 @@ class BasePage(object):
 	def __do_logout(self):
 		cherrypy.session.acquire_lock()
 		try:
-			cherrypy.lib.sessions.expire()
+#			cherrypy.lib.sessions.expire()
 			cherrypy.session.delete()
 
-			if hasattr(cherrypy.session, 'username'):
-				raise error.FatalException("Still have session username ... this shouldn't ever happen ... please tell the openIPAM developers about this error and the conditions under which it happened.")
+#			if cherrypy.session.has_key('username'):
+#				raise error.FatalException("Still have session username ... this shouldn't ever happen ... please tell the openIPAM developers about this error and the conditions under which it happened.")
 		finally:
 			cherrypy.session.release_lock()
 			try:
@@ -65,23 +65,27 @@ class BasePage(object):
 		cherrypy.session.acquire_lock()
 
 		try:
-			if not cherrypy.session.has_key('transport'):
-				cherrypy.session['transport'] = CookieAuthXMLRPCSafeTransport( ssl=frontend.xmlrpc_ssl_enabled )
-
-			self.webservice = xmlrpclib.ServerProxy(self.__url, transport=cherrypy.session['transport'], allow_none=True)
+			if not hasattr(self, 'webservice'):
+				transport = CookieAuthXMLRPCSafeTransport( ssl=frontend.xmlrpc_ssl_enabled )
+				self.webservice = xmlrpclib.ServerProxy(self.__url, transport=transport, allow_none=True)
 
 			have_username = cherrypy.session.has_key('username')
 		finally:
 			cherrypy.session.release_lock()
 
 
+		if not logging_in and not have_username:
+			print "NOT LOGGING IN WITHOUT USER NAME"
+			print cherrypy.session.keys()
+			self.redirect("/login")
+			return
+
 		# FIXME: there has to be a better way...
 		if not logging_in and not self.webservice.have_session():
 			self.__do_logout()
 			self.redirect("/login/?expired=true")
 
-		if not logging_in and not have_username:
-			self.redirect("/login")
+
 
 	#-----------------------------------------------------------------
 
@@ -90,7 +94,7 @@ class BasePage(object):
 		"""The home page."""
 		cherrypy.session.acquire_lock()
 		try:
-			if cherrypy.session.has_key('transport'):
+			if cherrypy.session.has_key('username'):
 				self.redirect("/hosts/")
 			self.redirect("/login")
 		finally:
@@ -123,7 +127,7 @@ class BasePage(object):
 	def logged_in(self):
 		cherrypy.session.acquire_lock()
 		try:
-			return cherrypy.session.has_key('user') and cherrypy.session['user']['username']
+			return cherrypy.session.has_key('cookies')
 		finally:
 			cherrypy.session.release_lock()
 		return False
@@ -140,6 +144,8 @@ class BasePage(object):
 
 		#if referer is None and cherrypy.request.headers.has_key('Referer'):
 		#	referer = cherrypy.request.headers['Referer']
+
+		print kw
 
 		if not username and not password:
 			content = '''
@@ -205,7 +211,7 @@ class BasePage(object):
 				# redirect to main page
 				if referer is not None and 'login' not in referer:
 					self.redirect(referer)
-				self.redirect('/')
+				self.redirect('/hosts')
 			except Exception, e:
 				error_string = error.parse_webservice_fault(e)
 				if error_string == "InvalidCredentials":
