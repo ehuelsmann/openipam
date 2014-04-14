@@ -43,6 +43,7 @@ class BasePage(object):
 		try:
 			cherrypy.lib.sessions.expire()
 			cherrypy.session.delete()
+			cherrypy.session.regenerate()
 
 			if cherrypy.session.has_key('username'):
 				raise error.FatalException("Still have session username ... this shouldn't ever happen ... please tell the openIPAM developers about this error and the conditions under which it happened.")
@@ -75,8 +76,6 @@ class BasePage(object):
 
 
 		if not logging_in and not have_username:
-			print "NOT LOGGING IN, YET NO USER NAME"
-			print cherrypy.session.keys()
 			self.redirect("/login")
 
 		# FIXME: there has to be a better way...
@@ -136,15 +135,6 @@ class BasePage(object):
 		'''The login page'''
 
 		self.check_session(logging_in=True)
-
-		if self.logged_in():
-			# They're already logged in
-			self.redirect("/hosts")
-
-		#if referer is None and cherrypy.request.headers.has_key('Referer'):
-		#	referer = cherrypy.request.headers['Referer']
-
-		print kw
 
 		if not username and not password:
 			content = '''
