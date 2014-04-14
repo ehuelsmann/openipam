@@ -1,5 +1,5 @@
 import cherrypy
-from local_settings import config
+from openipam.config import frontend
 
 from basepage import BasePage
 
@@ -27,7 +27,7 @@ class Domains(BasePage):
         counter = 0
 
         actions = ('Add Domain',)
-        action_links = ('/dns/add',)
+        action_links = ('/domains/add',)
         
         # Run through our actions list and highlight the currently selected action
         for action in actions:
@@ -84,7 +84,7 @@ class Domains(BasePage):
     #-----------------------------------------------------------------
     
     @cherrypy.expose
-    def index(self):
+    def index(self, **kw):
         """The domains page"""
 
         # Confirm user authentication
@@ -170,7 +170,7 @@ class Domains(BasePage):
     #-----------------------------------------------------------------
 
     @cherrypy.expose
-    def add(self):
+    def add(self, **kw):
         '''The form to add a group'''
         
         # Confirm user authentication
@@ -184,7 +184,7 @@ class Domains(BasePage):
     #-----------------------------------------------------------------
 
     @cherrypy.expose
-    def edit(self, did):
+    def edit(self, did, **kw):
         '''The form to edit a domain'''
         
         # Confirm user authentication

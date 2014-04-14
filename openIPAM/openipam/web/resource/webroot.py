@@ -4,6 +4,7 @@ def get_web_root():
 	from openipam.web.basepage import BasePage
 	from openipam.web.hosts import Hosts
 	from openipam.web.networks import Networks
+	from openipam.web.domains import Domains
 	from openipam.web.dns import DNS
 	from openipam.web.access import Access
 	from openipam.web.ajax import AjaxTransport
@@ -26,6 +27,7 @@ def get_web_root():
 	root = BasePage()
 	root.hosts = Hosts()
 	root.networks = Networks()
+	root.domains = Domains()
 	root.dns = DNS()
 	root.dhcp = BasePage()
 	root.access = Access()
