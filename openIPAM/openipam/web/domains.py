@@ -55,7 +55,7 @@ class Domains(BasePage):
             filter = { 'did' : did }
             domain = self.webservice.get_domain(filter)[0]
             
-        form = '''<form action="/dns/process_domain" method="post" class="form">
+        form = '''<form action="/domains/process_domain" method="post" class="form">
                 <div id="element">
                     <div id="label">Domain name*:</div>
                     <div id="value"><input type="text" class="text" name="name" value="''' + domain['name'] + '''" /></div>
@@ -209,7 +209,7 @@ class Domains(BasePage):
                 args = {
                         'name' : kw['name'],
                         'master' : kw['master'],
-                        'type' : kw['type']
+                        'typename' : kw['type']
                         }
                 self.webservice.add_domain(args)
             except:
@@ -221,12 +221,12 @@ class Domains(BasePage):
                         'did' : kw['did'],
                         'name' : kw['name'],
                         'master' : kw['master'],
-                        'type' : kw['type']
+                        'typename' : kw['type']
                         }
                 self.webservice.edit_domain(args)
             except:
                 raise Exception("Could not update domain.")
             
-        raise cherrypy.InternalRedirect("/dns")
+        raise cherrypy.InternalRedirect("/domains")
     
     #-----------------------------------------------------------------
