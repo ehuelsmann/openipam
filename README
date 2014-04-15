@@ -17,6 +17,105 @@ Feel free to create issues at
      https://github.com/ehuelsmann/openipam/issues
 
 
+Dependencies
+============
+
+Debian Wheezy Packages
+----------------------
+
+Prefix the package lists with 'apt-get install' to make sure you have the
+packages installed.
+
+ * Shared by all
+   postgresql
+
+ * Backend (XML-RPC webservices)
+   python-cherrypy3 python-ldap python-psycopg2
+   python-openssl python-sqlalchemy python-ipy python-cjson
+
+ * Front-end (web interface)
+   python-cherrypy3 python-openssl python-cheetah python-ipy python-cjson
+
+ * DHCP server (openDHCP)
+   python-psycopg2 python-sqlalchemy
+
+ * DNS server (PowerDNS)
+   pdns-server pdns-backend-pgsql
+
+ * SSL for backend and/or frontend
+   ssl-cert
+
+The website https://code.google.com/p/openipam/wiki/Installation also
+lists python-processing for the DCHP server, but that dependency has
+been eliminated due to the use of python 2.7.
+
+
+Other distros
+-------------
+
+
+Please provide your package naming.
+
+
+Installation
+------------
+
+Assuming you want to install all components, these are the steps to get
+openIPAM set up on Debian Wheezy, after installing all the dependencies
+listed above:
+
+  adduser --home /usr/local/openipam --disabled-password \
+          --gecos "openIPAM User" openipam
+
+  ## THIS BLOCK ONLY IF YOU WANT SSL -- START
+  apt-get install  ssl-cert
+  adduser openipam ssl-cert
+  ## THIS BLOCK ONLY IF YOU WANT SSL -- END
+
+  mkdir -p /var/lib/openipam/sessions/backend
+  mkdir -p /var/log/openipam/backend
+  mkdir -p /var/lib/openipam/sessions/web
+  mkdir -p /var/log/openipam/web
+  chown -R openipam /var/lib/openipam /var/log/openipam
+
+  su - openipam
+  svn co https://github.com/ehuelsmann/openipam/trunk/openipam .
+  cd openIPAM/
+  svn export openipam_config.example openipam_config
+  exit
+
+
+  su - postgres
+  createuser --pwprompt --no-superuser --no-createdb
+             --no-createrole openipam
+  # createuser asks for a password here. Remember it, we need it later!
+  createdb -O openipam openipam
+  exit
+
+
+  su - openipam
+  (psql -d openipam -f openIPAM/sql/openipam_schema.sql 2>&1) \
+    | tee log | grep 'ERROR' 
+  # IF THE ABOVE SHOWS NO OUTPUT, CHECK THE 'log' FILE TO SEE IF THE COMMAND
+  # RAN AT ALL. IF THE 'log' FILE IS NON-EMPTY AND THERE ARE NO ERRORS,
+  # THE DATABASE SCHEMA LOADED CORRECTLY
+  exit
+
+
+  # The cherrypy patch https://code.google.com/p/openipam/wiki/Installation
+  # speaks of, is outdated information: the patch is no longer required
+
+
+### WRITEME: Apache + mod_wsgi
+
+
+### WRITEME: dhcpd
+
+
+### WRITEME: Startup scripts
+
+
+
 
 Original project
 ================
