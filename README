@@ -95,7 +95,7 @@ listed above:
 
   su - openipam
   (psql -d openipam -f openIPAM/sql/openipam_schema.sql 2>&1) \
-    | tee log | grep 'ERROR' 
+    | tee log | grep 'ERROR'
   # IF THE ABOVE SHOWS NO OUTPUT, CHECK THE 'log' FILE TO SEE IF THE COMMAND
   # RAN AT ALL. IF THE 'log' FILE IS NON-EMPTY AND THERE ARE NO ERRORS,
   # THE DATABASE SCHEMA LOADED CORRECTLY
