@@ -1,0 +1,108 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!-- saved from url=(0028)http://localhost:8081/hosts/ -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+	<title>openIPAM</title>
+	
+	<meta http-equiv="content-language" content="en">
+	<meta name="robots" content="noindex,nofollow">
+	
+	<link href="./openIPAM2_files/main.css" rel="stylesheet" type="text/css">
+	<!--[if lte IE 7]>
+	<link href="/styles/css/patch_layout.css" rel="stylesheet" type="text/css" />
+	<![endif]-->
+</head>
+<body>
+	<div id="page_margins">
+
+			<div id="topnav">
+				<a class="skip" title="skip link" href="http://localhost:8081/hosts/#navigation">Skip to the navigation</a>
+				<span class="hideme">.</span>
+				<a class="skip" title="skip link" href="http://localhost:8081/hosts/#main">Skip to the content</a>
+				<span class="hideme">.</span>
+				<a href="http://localhost:8081/logout">Logout admin</a> | 
+			</div>
+		<div id="page">
+			<div id="header">
+				<a href="http://localhost:8081/" onfocus="this.blur()"><img src="./openIPAM2_files/logo.png"></a>
+			</div>
+			<div id="nav">
+				<a id="navigation" name="navigation"></a>
+				<div id="nav_main">
+					<ul>
+						<li id="current"><a href="./openIPAM2_files/openIPAM2.html">Manage Hosts</a></li><li><a href="http://localhost:8081/networks">Networks</a></li><li><a href="http://localhost:8081/domains">Domains</a></li><li><a href="http://localhost:8081/dns">Manage DNS</a></li>
+					</ul>
+					<ul class="rightbar">
+						<li><a href="http://localhost:8081/admin">Administration</a></li>
+					</ul>
+				</div>
+			</div>
+			<div id="main">
+				<div id="col1">
+					<div id="col1_content" class="clearfix">
+					<ul id="submenu"><li id="title">Actions</li><li><a href="http://localhost:8081/hosts/add">Add Host</a></li></ul><ul id="submenu" class="options"><li id="title">Options</li><li><a href="http://localhost:8081/hosts/?show_expired">Hide expired hosts</a></li><li><a href="http://localhost:8081/hosts/?show_all">Show only my hosts</a></li></ul>
+					</div>
+				</div>
+				<div id="col3">
+					<div id="col3_content" class="clearfix">
+					
+					<noscript>
+						&lt;div class="message"&gt;&lt;div&gt;JavaScript is required for openIPAM to function properly. Please enable JavaScript.&lt;/div&gt;&lt;/div&gt;
+					</noscript>
+					<div id="globalMessage" class="hidden message"><!-- --></div>
+					
+<div id="searchHelp" class="hidden">
+	<p>Search for hostnames, IP addresses, MAC addresses, or networks (in
+	CIDR notation).  Wildcards are allowed in hostnames.  Hostnames without a '.'
+	are assumed to be *name*.</p>
+	<strong>For advanced searches...</strong>
+	<p>Multiple search terms may be included, space separated, but no more
+	than one of each type.  Many combinations do not make sense, but you can try
+	them anyway.</p>
+	<p>Try these special query types:</p><p>
+	</p><pre>user:<em>username here</em></pre>
+	<pre>name:<em>hostname</em></pre>
+	<pre>desc:<em>descriptionword</em></pre>
+	<pre>ip:<em>IP address</em></pre>
+	<pre>net:<em>network (CIDR notation)</em></pre>
+	<pre>mac:<em>MAC address</em></pre>
+	<pre>mac:<em>Partial MAC address*</em></pre>
+	<pre>mac:<em>MAC address-MAC address</em></pre>
+</div>
+
+<div style="float: right; width: 320px;">
+	<img src="./openIPAM2_files/loader.gif" id="loaderIcon" style="float:left; padding-top:8px; display: none">
+	<form name="search" class="search" method="get" action="http://localhost:8081/hosts/search/">
+			<div class="submit">
+				<a href="javascript:;" id="searchHelpIcon"><img src="./openIPAM2_files/question.gif"></a>
+				<input type="text" class="text" id="searchBox" name="q" style="width: 200px" value="">
+				<input type="submit" id="submitSearch" value="Search">
+			</div>
+	</form>
+</div>
+
+<h1>Hosts</h1>
+<a href="http://localhost:8081/hosts/search/?username=admin&expiring=60">Show my hosts expiring within 60 days</a>
+
+	<img style="float: right; margin-right: 350px; margin-top: 6px" src="./openIPAM2_files/search_here.png">
+	<div class="goodMessage">
+		What hosts would you like to see?
+	</div>
+
+
+					<div id="ie_clearing">&nbsp;</div>
+				</div>
+			</div><!-- end main --->
+			
+			<div id="footer">
+				Powered by <a href="http://www.openipam.org/">openIPAM</a> - Produced by <a href="http://www.usu.edu/">Utah State University</a> - <a href="http://it.usu.edu/">Information Technology</a>
+			</div>
+		</div><!-- end page -->
+	</div><!-- end page margins -->
+	<script type="text/javascript" src="./openIPAM2_files/jquery.min.js"></script>
+	<script type="text/javascript" src="./openIPAM2_files/jquery.openipam.js"></script>
+	<script type="text/javascript">
+		$.openipam.init();
+	</script>
+	<script type="text/javascript" src="./openIPAM2_files/jquery-ui-personalized.min.js"></script><script type="text/javascript" src="./openIPAM2_files/hosts.js"></script>
+
+ </div></body></html>

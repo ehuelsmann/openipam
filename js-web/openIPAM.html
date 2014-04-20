@@ -1,0 +1,210 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>openIPAM</title>
+    
+    <meta name="robots" content="noindex,nofollow" />
+    <meta http-equiv="content-language" content="en" />
+    
+    <link href="css/main.css" rel="stylesheet" type="text/css" />
+    <script src="https://code.jquery.com/jquery-1.11.0.min.js" ></script>
+    <script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js"></script>
+    <script src="js/handlebars-v1.3.0.js"></script>
+    
+<!--    <script type="text/javascript">
+      function focusit() {
+      document.getElementById('username').focus();
+      }
+      window.onload = focusit;
+    </script> -->
+  </head>
+  <body class="login" style="height:100%">
+
+    <div id="screen" style="height:100%"></div>
+    
+    
+    <script id="login-screen" type="text/x-handlebars-template">
+      <div id="login">
+        <h1><a href="http://localhost:8081/"
+               title="Powered by openIPAM"
+               onfocus="this.blur()">openIPAM</a></h1>
+        
+        <form id="login-form" name="login">
+          <p>
+            <label for="username">Username:</label><br />
+            <input type="text"
+                   name="username" id="username" class="text" value="" size="20" />
+          </p>
+          <p>
+          <label for="password">Password:</label><br />
+          <input type="password"
+                 name="password" id="password" class="text" value="" size="20" />
+          </p>
+          <p class="submit">
+            <input type="submit" value="Login »" />
+          </p>
+        </form>
+      </div>
+    </script>
+    
+    <script id="app-screen" type="text/x-handlebars-template">
+      <div id="page_margins">
+	<div id="topnav">
+	  <a class="skip" title="skip link" href="http://localhost:8081/hosts/#navigation">Skip to the navigation</a>
+	  <span class="hideme">.</span>
+	  <a class="skip" title="skip link" href="http://localhost:8081/hosts/#main">Skip to the content</a>
+	  <span class="hideme">.</span>
+	  <a href="#logout">Logout admin</a> | 
+	</div>
+	<div id="page">
+	  <div id="header">
+	    <a href="http://localhost:8081/" onfocus="this.blur()"><img src="images/logo.png" /></a>
+	  </div>
+	  <div id="nav">
+	    <a id="navigation" name="navigation"></a>
+	    <div id="nav_main">
+	      <ul>
+		<li id="current"><a href="#hosts">Manage Hosts</a></li>
+                <li><a href="#networks">Networks</a></li>
+                <li><a href="#domains">Domains</a></li>
+                <li><a href="#dns">Manage DNS</a></li>
+	      </ul>
+	      <ul class="rightbar">
+		<li><a href="#admin">Administration</a></li>
+	      </ul>
+	    </div>
+	  </div>
+        <div id="main">
+          <div id="col1">
+	    <div id="col1_content" class="clearfix">
+              <div id="left-menu"></div>
+	    </div>
+          </div>
+          <div id="col3">
+	    <div id="col3_content" class="clearfix">
+            </div>
+          </div>
+        </div>
+        </div> <!--page--> 
+
+        <div id="footer" style="float: bottom">
+	  Powered by <a href="http://www.openipam.org/">openIPAM</a> - Produced by <a href="http://www.usu.edu/">Utah State University</a> - <a href="http://it.usu.edu/">Information Technology</a>
+        </div> 
+      </div> <!--page_margins-->
+    </script>
+    
+
+    <script id="left-menu-tmpl" type="text/x-handlebars-template">
+      <ul id="submenu">
+        <li id="title">{{title}}</li>
+        {{#list items}}<li><a href="{{link}}">{{value}}</a></li>{{/list}}
+      </ul>
+      <ul id="submenu" class="options">
+        <li id="title">Options</li>
+        {{#list options}}<li><a href="{{link}}">{{value}}</a></li>{{/list}}
+      </ul>
+    </script>
+
+    <script>
+      var hosts_menu = {
+         title: "Hosts",
+         items: [
+            { value: "Add host",
+              link: "/hosts/add" }
+         ],
+         options: [
+            { value: "Host option",
+              link: "?option=first" }
+         ]};
+    </script>
+
+    <script id="hosts-page" type="text/x-handlebars-template">	  
+      <noscript>
+	&lt;div class="message"&gt;&lt;div&gt;JavaScript is required for openIPAM to function properly. Please enable JavaScript.&lt;/div&gt;&lt;/div&gt;
+      </noscript>
+      <div id="globalMessage" class="hidden message"><!-- --></div>
+      
+      <div id="searchHelp" class="hidden">
+	<p>Search for hostnames, IP addresses, MAC addresses, or networks (in
+	  CIDR notation).  Wildcards are allowed in hostnames.  Hostnames without a '.'
+	  are assumed to be *name*.</p>
+	<strong>For advanced searches...</strong>
+	<p>Multiple search terms may be included, space separated, but no more
+	  than one of each type.  Many combinations do not make sense, but you can try
+	  them anyway.</p>
+	<p>Try these special query types:</p><p>
+	</p><pre>user:<em>username here</em></pre>
+	<pre>name:<em>hostname</em></pre>
+	<pre>desc:<em>descriptionword</em></pre>
+	<pre>ip:<em>IP address</em></pre>
+	<pre>net:<em>network (CIDR notation)</em></pre>
+	<pre>mac:<em>MAC address</em></pre>
+	<pre>mac:<em>Partial MAC address*</em></pre>
+	<pre>mac:<em>MAC address-MAC address</em></pre>
+      </div>
+      
+      <div style="float: right; width: 320px;">
+        <img src="images/loader.gif" id="loaderIcon" style="float:left; padding-top:8px; display: none" />
+        <form name="search" class="search" method="get" action="http://localhost:8081/hosts/search/">
+          <div class="submit">
+	    <a href="javascript:;" id="searchHelpIcon"><img src="images/question.gif" /></a>
+	    <input type="text" class="text" id="searchBox" name="q" style="width: 200px" value="" />
+	    <input type="submit" id="submitSearch" value="Search" />
+	  </div>
+	</form>
+      </div>
+      
+      <h1>Hosts</h1>
+      <a href="http://localhost:8081/hosts/search/?username=admin&expiring=60">Show my hosts expiring within 60 days</a>
+      
+      <img style="float: right; margin-right: 350px; margin-top: 6px" src="images/search_here.png" />
+      <div class="goodMessage">
+	What hosts would you like to see?
+      </div>
+      
+      
+      <div id="ie_clearing">&nbsp;</div>
+    </script>
+
+    <script>
+
+Handlebars.registerHelper('list', function(items, options) {
+  if (! (items instanceof Array)) {
+    return '';
+  }
+  var out = '';
+  for(var i=0, l=items.length; i<l; i++) {
+    out = out + options.fn(items[i]);
+  }
+  return out;
+});
+
+
+function show_page(page) {
+  var source = $("#left-menu-tmpl").html();
+  var template = Handlebars.compile(source);
+  $("#left-menu").html(template(hosts_menu));
+  $("#col3_content").html($("#hosts-page").html());
+  $("body").removeClass();
+};
+
+
+function show_login() {
+  $("#screen").html($("#login-screen").html());
+  $("body").addClass("login");
+  $("#login-form").submit( function (event) {
+     event.preventDefault();
+     $('#screen').html($('#app-screen').html());
+     show_page('hosts');
+  });
+  return false;
+}
+
+
+show_login();
+    </script>
+
+
+  </body>
+</html>
