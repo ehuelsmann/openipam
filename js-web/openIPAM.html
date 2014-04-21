@@ -98,7 +98,7 @@
     <script id="left-menu-tmpl" type="text/x-handlebars-template">
       <ul id="submenu">
         <li id="title">{{title}}</li>
-        {{#list items}}<li><a href="{{link}}">{{value}}</a></li>{{/list}}
+        {{#list items}}<li><a href="{{link}}">{{title}}</a></li>{{/list}}
       </ul>
       <ul id="submenu" class="options">
         <li id="title">Options</li>
@@ -119,7 +119,7 @@
          ]};
     </script>
 
-    <script id="hosts-page" type="text/x-handlebars-template">	  
+    <script id="hosts-default-page" type="text/x-handlebars-template">	  
       <noscript>
 	&lt;div class="message"&gt;&lt;div&gt;JavaScript is required for openIPAM to function properly. Please enable JavaScript.&lt;/div&gt;&lt;/div&gt;
       </noscript>
@@ -180,13 +180,70 @@ Handlebars.registerHelper('list', function(items, options) {
   return out;
 });
 
+var pages = {};
+var default_page = '';
 
-function show_page(page) {
-  var source = $("#left-menu-tmpl").html();
-  var template = Handlebars.compile(source);
-  $("#left-menu").html(template(hosts_menu));
-  $("#col3_content").html($("#hosts-page").html());
+function register_page(page) {
+  pages[page.name] = { page: page, actions: [], default_action: '' };
+  if (page.default)
+    default_page = page.name;
+}
+
+function register_action(page, action) {
+   if (action.default)
+     pages[page].default_action = action;
+   pages[page].actions.push(action);
+}
+
+
+register_page({
+  name: "hosts",
+  title: "Hosts",
+  menu: hosts_menu,
+  body_class: undefined,
+  default: true,
+  display: function() {
+    var source = $("#left-menu-tmpl").html();
+    var template = Handlebars.compile(source);
+    $("#left-menu").html(template(hosts_menu));
+    $("#col3_content").html($("#hosts-default-page").html());
+},
+});
+
+register_action('hosts', {
+  name: "search",
+  title: "Search",
+  options: [],
+  default: true,
+  display: function() {
+    show_action('hosts',this,'#hosts-default-page',{});
+  },
+});
+
+var left_menu_template = Handlebars.compile($("#left-menu-tmpl").html());
+
+function show_action(page, action, tmpl_id, context) {
+  page = pages[page];
+  $("#left-menu").html(left_menu_template({
+       items: page.actions,
+       options: action.options,
+       title: page.page.title
+    }));
+  var template = Handlebars.compile($(tmpl_id).html());
+  $("#col3_content").html(template(context));
+}
+
+function show_page(page_name) {
+  if (page_name == '')
+    page_name = default_page;
+
+  var page_settings = pages[page_name];
+  var page_object = pages[page_name].page;
+  page_object.display();
   $("body").removeClass();
+  if (page_object.body_class)
+    $("body").addClass(page_object.body_class);
+  page_settings.default_action.display();  
 };
 
 
@@ -196,7 +253,7 @@ function show_login() {
   $("#login-form").submit( function (event) {
      event.preventDefault();
      $('#screen').html($('#app-screen').html());
-     show_page('hosts');
+     show_page('');
   });
   return false;
 }
