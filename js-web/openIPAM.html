@@ -98,7 +98,8 @@
     <script id="left-menu-tmpl" type="text/x-handlebars-template">
       <ul id="submenu">
         <li id="title">{{title}}</li>
-        {{#list items}}<li><a href="{{link}}">{{title}}</a></li>{{/list}}
+        {{#list items}}<li><a href="javascript:;" 
+                              id="action-{{name}}">{{title}}</a></li>{{/list}}
       </ul>
       <ul id="submenu" class="options">
         <li id="title">Options</li>
@@ -167,6 +168,11 @@
       <div id="ie_clearing">&nbsp;</div>
     </script>
 
+    <script id="hosts-add-page" type="text/x-handlebars-template">
+
+    </script>
+
+
     <script>
 
 Handlebars.registerHelper('list', function(items, options) {
@@ -203,10 +209,7 @@ register_page({
   body_class: undefined,
   default: true,
   display: function() {
-    var source = $("#left-menu-tmpl").html();
-    var template = Handlebars.compile(source);
-    $("#left-menu").html(template(hosts_menu));
-    $("#col3_content").html($("#hosts-default-page").html());
+    show_default_action('hosts');
 },
 });
 
@@ -219,16 +222,46 @@ register_action('hosts', {
     show_action('hosts',this,'#hosts-default-page',{});
   },
 });
+register_action('hosts', {
+  name: "add",
+  title: "Add",
+  options: [],
+  default: false,
+  display: function() {
+    show_action('hosts',this,'#hosts-add-page', {});
+  },
+});
+
+
+function show_default_action(page) {
+  pages[page].default_action.display();
+}
 
 var left_menu_template = Handlebars.compile($("#left-menu-tmpl").html());
 
 function show_action(page, action, tmpl_id, context) {
   page = pages[page];
+
+  if (typeof action === 'undefined')
+    action = page.default_action;
+
+  if (action instanceof String)
+    action = page.actions[action];
+
   $("#left-menu").html(left_menu_template({
        items: page.actions,
        options: action.options,
        title: page.page.title
     }));
+  $.each(page.actions,
+         function (index, action) {
+           $("#action-"+action.name).click(
+             function (event) {
+               action.display();
+             });
+   });
+
+
   var template = Handlebars.compile($(tmpl_id).html());
   $("#col3_content").html(template(context));
 }
